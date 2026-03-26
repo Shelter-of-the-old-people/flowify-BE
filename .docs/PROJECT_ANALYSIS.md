@@ -1,7 +1,12 @@
-# Flowify Backend (FastAPI) - 프로젝트 분석 및 설계 문서
+# Flowify - 전체 시스템 분석 및 설계 문서
 
-> 작성일: 2026-03-09
-> 기반 문서: 주제제안서(김동현, 김민호, 윤동근, 최호림), 주제 결정 문서
+> 작성일: 2026-03-09 (최종 수정: 2026-03-22)
+> 기반 문서: 주제제안서(김동현, 김민호, 윤동근, 최호림), 주제 결정 문서, 요구사항 명세서
+
+> **참고**: 본 문서는 Flowify 전체 시스템의 분석 및 설계 개요를 다룬다.
+> - Spring Boot 메인 백엔드 상세 설계: [design/](design/README.md)
+> - 개발 계획: [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)
+> - 요구사항 명세서: [requirements/REQUIREMENTS_INDEX.md](requirements/REQUIREMENTS_INDEX.md)
 
 ---
 
@@ -16,12 +21,12 @@
 - 템플릿 기반으로 즉시 시작 가능
 
 ### 차별점
-| 항목 | n8n / Zapier / Make | Flowify |
-|------|-------------------|---------|
-| 대상 사용자 | 개발자 / 기술 숙련자 | 비전문가 포함 전체 |
-| AI 활용 | 부가 기능 | 핵심 노드 |
-| 설정 방식 | 복잡한 데이터 매핑 | 자연어 프롬프트 |
-| 진입 장벽 | 높음 | 낮음 (3단계 구조) |
+| 항목 | Flowify | n8n / Zapier / Make |
+|------|--------|-------------------|
+| 대상 사용자 | 비전문가 포함 전체 | 개발자 / 기술 숙련자 |
+| AI 활용 | 핵심 노드 | 부가 기능 |
+| 설정 방식 | 자연어 프롬프트 | 복잡한 데이터 매핑 |
+| 진입 장벽 | 낮음 (3단계 구조) | 높음 |
 
 ---
 
@@ -29,8 +34,8 @@
 
 ```
 ┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  Frontend   │────▶│  Spring Boot     │────▶│   MongoDB       │
-│  (React)    │     │  (메인 백엔드)      │     │  (Document DB)  │
+│  Frontend   │────▶│  Spring Boot     │───▶│   MongoDB       │
+│  (React)    │     │  (메인 백엔드)    │     │  (Document DB)  │
 └─────────────┘     └──────┬───────────┘     └─────────────────┘
                            │
                            ▼
@@ -41,19 +46,19 @@
                            │
                            ▼
                     ┌──────────────────┐
-                    │  LLM (EXAONE)   │
-                    │  via LangChain  │
+                    │  LLM (EXAONE)    │
+                    │  via LangChain   │
                     └──────────────────┘
 ```
 
 ### 역할 분리
-- **Spring Boot**: 회원/인증 관리, 워크플로우 CRUD, 핵심 비즈니스 로직, OAuth 토큰 관리
-- **FastAPI (이 레포)**: AI 모델 추론, LangChain 오케스트레이션, 비동기 파이프라인 실행, 벡터 검색
+- **Spring Boot (메인 백엔드)**: 회원/인증 관리, 워크플로우 CRUD, 핵심 비즈니스 로직, OAuth 토큰 관리
+- **FastAPI (AI 서비스)**: AI 모델 추론, LangChain 오케스트레이션, 비동기 파이프라인 실행, 벡터 검색
 - **MongoDB**: 채팅 히스토리, 캔버스 노드 정보, 워크플로우 상태 등 비정형 데이터
 
 ---
 
-## 3. FastAPI 서버의 담당 기능
+## 3. FastAPI AI 서비스 담당 기능
 
 ### 3.1 LLM 처리 서비스
 - 자연어 프롬프트 기반 데이터 처리 (요약, 분류, 질문 생성)
@@ -68,9 +73,9 @@
 - 비동기 실행 및 단계별 실시간 미리보기
 
 ### 3.3 외부 서비스 연동
-- Google Drive / Sheets / Gmail API 연동
-- Slack, Notion, GitHub API 연동
-- 범용 REST API 호출 노드
+- Google Drive / Sheets / Gmail / Calendar API 연동
+- Slack, Notion API 연동
+- 웹 수집 (쿠팡, 원티드, 네이버 뉴스 등)
 - OAuth 토큰 기반 사용자별 서비스 접근
 
 ### 3.4 트리거 및 스케줄링
@@ -85,7 +90,7 @@
 
 ---
 
-## 4. FastAPI 프로젝트 구조 제안
+## 4. FastAPI 프로젝트 구조 (별도 레포)
 
 ```
 flowify-BE/
@@ -134,8 +139,8 @@ flowify-BE/
 │   │       ├── gmail.py           # Gmail 연동
 │   │       ├── slack.py           # Slack 연동
 │   │       ├── notion.py          # Notion 연동
-│   │       ├── github.py          # GitHub 연동
-│   │       └── rest_api.py        # 범용 REST API 노드
+│   │       ├── calendar.py        # Google Calendar 연동
+│   │       └── web_crawler.py     # 웹 수집 (쿠팡, 원티드, 네이버 뉴스 등)
 │   ├── models/
 │   │   ├── __init__.py
 │   │   ├── workflow.py            # 워크플로우 모델
@@ -246,7 +251,7 @@ class ConditionNodeStrategy(NodeStrategy):
 | 벡터 스토어 | FAISS, Chroma | 지식 베이스, 유사도 검색 |
 | DB | MongoDB (Motor) | 비정형 데이터 비동기 접근 |
 | 스케줄링 | APScheduler | 시간 기반 트리거 |
-| 외부 연동 | google-api-python-client, slack-sdk, notion-client | 서비스 API 연동 |
+| 외부 연동 | google-api-python-client, slack-sdk, notion-client | 서비스 API 연동 (요구사항 SFR-03 기준) |
 | 문서 처리 | pdfminer.six, openpyxl, weasyprint | PDF/Excel 파싱 및 생성 |
 | 컨테이너 | Docker | 환경 패키징 |
 | 배포 | Cloudtype | 호스팅 |
@@ -285,15 +290,17 @@ class ConditionNodeStrategy(NodeStrategy):
 - [ ] LangChain + LLM 노드 연동
 
 ### Phase 3: 외부 연동 (4월 중)
-- [ ] Google Drive / Sheets / Gmail 연동
+- [ ] Google Drive / Sheets / Gmail / Calendar 연동
 - [ ] Notion, Slack 연동
-- [ ] 범용 REST API 노드
+- [ ] 웹 수집 노드 (쿠팡, 원티드, 네이버 뉴스 등)
 - [ ] OAuth 토큰 관리
 
 ### Phase 4: 고급 기능 (5월)
 - [ ] 트리거/스케줄링 시스템
 - [ ] 조건/반복 로직 노드
-- [ ] 스냅샷 기반 롤백 메커니즘
+- [ ] 스냅샷 기반 롤백 메커니즘 (EXR-06)
+- [ ] 워크플로우 유효성 검증 (EXR-05)
+- [ ] 이기종 데이터 규격 변환 (EXR-08)
 - [ ] 실행 로그 및 디버깅
 
 ### Phase 5: 안정화 (6월)
@@ -304,13 +311,16 @@ class ConditionNodeStrategy(NodeStrategy):
 
 ---
 
-## 10. 팀 내 FastAPI 서버 역할 (윤동근 담당)
+## 10. 팀 역할 분담
 
-제안서 기준 담당 업무:
-- FastAPI, Spring 서버 구축
+### 윤동근 담당
+- FastAPI AI 서비스 구축
+- Spring Boot 메인 백엔드 구축
 - LangChain 연동
 - MongoDB 설계
 - 백엔드 인프라 구축
 
-Spring Boot와의 통신은 내부 REST API 또는 메시지 큐를 통해 처리하며,
+### 시스템 간 통신
+Spring Boot와 FastAPI의 통신은 내부 REST API를 통해 처리하며,
 FastAPI는 AI/LLM 관련 요청을 전담하는 **마이크로서비스** 역할을 한다.
+프론트엔드는 Spring Boot에만 요청하며 FastAPI는 외부에 노출하지 않는다.
