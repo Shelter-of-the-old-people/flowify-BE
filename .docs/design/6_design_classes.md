@@ -355,6 +355,11 @@
 | deleteWorkflow | public | Authentication, String id | ApiResponse\<Void\> | DELETE /api/workflows/{id} — 워크플로우 삭제 |
 | shareWorkflow | public | Authentication, String id, ShareRequest | ApiResponse\<Void\> | POST /api/workflows/{id}/share — 공유 설정 (소유자만) |
 | generateWorkflow | public | Authentication, GenerateWorkflowRequest | ApiResponse\<WorkflowResponse\> | POST /api/workflows/generate — LLM 기반 워크플로우 자동 생성 (UC-W02). FastAPI에 위임 후 결과를 워크플로우로 저장 |
+| getNodeChoices | public | Authentication, String id, String prevNodeId | ApiResponse\<ChoiceResponse\> | GET /api/workflows/{id}/choices/{prevNodeId} — 이전 노드 outputDataType 기반 선택지 조회 |
+| selectNodeChoice | public | Authentication, String id, String prevNodeId, NodeChoiceSelectRequest | ApiResponse\<NodeSelectionResult\> | POST /api/workflows/{id}/choices/{prevNodeId}/select — 사용자 선택 전송 → 후속 설정 또는 노드 타입 확정 |
+| addMiddleNode | public | Authentication, String id, MiddleNodeRequest | ApiResponse\<WorkflowResponse\> | POST /api/workflows/{id}/nodes — 확정된 중간 노드 추가 + edge 생성 |
+| updateNode | public | Authentication, String id, String nodeId, NodeUpdateRequest | ApiResponse\<WorkflowResponse\> | PUT /api/workflows/{id}/nodes/{nodeId} — 노드 설정 수정 |
+| deleteNode | public | Authentication, String id, String nodeId | ApiResponse\<WorkflowResponse\> | DELETE /api/workflows/{id}/nodes/{nodeId} — 노드 삭제 + 후속 노드 캐스케이드 삭제 |
 
 ---
 
@@ -373,6 +378,7 @@
 | workflowRepository | private | WorkflowRepository | 워크플로우 레포지토리 |
 | workflowValidator | private | WorkflowValidator | 워크플로우 유효성 검증기 |
 | fastApiClient | private | FastApiClient | FastAPI 통신 클라이언트 (LLM 기반 생성용) |
+| choiceMappingService | private | ChoiceMappingService | 선택지 매핑 서비스 (데이터 타입 기반 동적 선택지) |
 
 **메소드:**
 
@@ -387,6 +393,15 @@
 | verifyOwnership | private | Workflow, String userId | void | 소유자 검증. 실패 시 WORKFLOW_ACCESS_DENIED |
 | verifyAccess | private | Workflow, String userId | void | 접근 권한 검증 (소유자 또는 공유 대상) |
 | generateWorkflowFromPrompt | public | String userId, String prompt | WorkflowResponse | LLM 기반 워크플로우 자동 생성 (UC-W02). FastApiClient를 통해 LLM에 프롬프트 전송 → 반환된 노드/엣지 구조를 워크플로우로 저장. 실패 시 LLM_GENERATION_FAILED (EXR-04) |
+| setupStartNode | public | String userId, String workflowId, StartNodeRequest | WorkflowResponse | 시작 노드 설정 (UC-W01-A). 카테고리/서비스/실행 조건/데이터 대상 → 트리거 타입 내부 결정 |
+| setupEndNode | public | String userId, String workflowId, EndNodeRequest | WorkflowResponse | 도착 노드 설정 (UC-W01-B). 카테고리/서비스/동작 유형 → 세부 설정은 지연 |
+| getNodeChoices | public | String userId, String workflowId, String prevNodeId | ChoiceResponse | 이전 노드 outputDataType 기반 선택지 조회 |
+| selectNodeChoice | public | String userId, String workflowId, String prevNodeId, NodeChoiceSelectRequest | NodeSelectionResult | 사용자 선택 처리. node_type 결정 + follow_up/branch_config 반환 |
+| addMiddleNode | public | String userId, String workflowId, MiddleNodeRequest | WorkflowResponse | 중간 노드 추가 (UC-W01-D). 3단계 설정 흐름 → 사용자 선택 기반 노드 타입 결정 |
+| updateNode | public | String userId, String workflowId, String nodeId, NodeUpdateRequest | WorkflowResponse | 노드 설정 수정. 접근 권한 검증 |
+| deleteNodeCascade | public | String userId, String workflowId, String nodeId | WorkflowResponse | 노드 삭제 + 후속 노드 캐스케이드 삭제. 조건 분기 노드 삭제 시 모든 분기 경로 후속 삭제 |
+| chatGenerateWorkflow | public | String userId, String workflowId, ChatMessage | ChatResponse | 채팅형 AI 생성 (UC-W02). 반복 대화를 통한 워크플로우 생성 |
+| determineNodeType | private | String userChoice, String dataType | String | 사용자 선택 → 내부 노드 타입 매핑 (Loop, 조건 분기, AI 등) |
 
 ---
 
@@ -406,6 +421,7 @@
 | checkCyclicReference | private | List\<NodeDefinition\>, List\<EdgeDefinition\> | void | DFS 기반 순환 참조 검출 |
 | checkIsolatedNodes | private | List\<NodeDefinition\>, List\<EdgeDefinition\> | void | 연결되지 않은 고립 노드 검출 |
 | checkRequiredConfig | private | List\<NodeDefinition\> | void | 노드별 필수 설정값 누락 검출 |
+| checkDataTypeCompatibility | private | List\<NodeDefinition\>, List\<EdgeDefinition\> | void | 노드 간 데이터 타입 호환성 검증. 비호환 시 경고 생성 |
 
 ---
 
@@ -450,10 +466,14 @@
 | 속성명 | 가시성 | 타입 | 설명 |
 |--------|--------|------|------|
 | id | private | String | 노드 고유 ID (e.g., "node_1") |
-| category | private | String | 노드 카테고리 (service \| processing \| ai) |
+| category | private | String | 노드 카테고리 (communication \| storage \| spreadsheet \| web_crawl \| calendar \| ai \| processing) |
 | type | private | String | 노드 타입 (communication, storage, spreadsheet, web_crawl, calendar, trigger, filter, loop, condition, multi_output, data_process, output_format, early_stop, notification, llm) |
 | config | private | Map\<String, Object\> | 노드별 설정값 |
 | position | private | Position | 캔버스 좌표 {x, y} |
+| dataType | private | String | 입력 데이터 타입 (file_list \| single_file \| text \| spreadsheet \| email_list \| api_response) |
+| outputDataType | private | String | 출력 데이터 타입 (노드 처리 결과에 따라 변환될 수 있음) |
+| role | private | String | 노드 역할 (start \| end \| middle) — 가이드형 생성 흐름에서의 위치 |
+| authWarning | private | boolean | 미인증 서비스 경고 여부 (템플릿에서 가져온 노드용). Default: false |
 
 ---
 
@@ -1139,3 +1159,53 @@
 |----------|--------|---------|--------|------|
 | convert | public | Map\<String, Object\> sourceData, String sourceFormat, String targetFormat | Map\<String, Object\> | 소스 데이터를 대상 포맷으로 변환. 자동 변환 시도, 실패 시 DATA_CONVERSION_FAILED (EXR-08) |
 | getFieldMapping | public | String sourceFormat, String targetFormat | Map\<String, String\> | 소스-대상 포맷 간 필드 매핑 규칙 조회 |
+
+---
+
+## 모듈 8: 선택지 매핑 시스템 (PK-C08)
+
+> **NEW**: update.md의 선택지 매핑 시스템 요구사항에 따라 추가.
+
+### DC-C0801: ChoiceMappingService
+
+| 항목 | 내용 |
+|------|------|
+| **클래스 다이어그램 식별자** | PK-C08 |
+| **클래스 식별자** | DC-C0801 |
+| **클래스 명** | ChoiceMappingService |
+
+**설명:** 데이터 타입 기반 동적 선택지 매핑 서비스. `docs/mapping_rules.json` 파일을 읽어 이전 노드의 출력 데이터 타입에 따라 다음 노드 설정에 필요한 선택지를 동적으로 제공한다. **매 요청마다 파일을 읽지 않고 서버 시작 시 메모리에 캐싱하여 성능을 최적화한다.**
+
+**속성:**
+
+| 속성명 | 가시성 | 타입 | 설명 |
+|--------|--------|------|------|
+| objectMapper | private | ObjectMapper | JSON 파싱용 Jackson ObjectMapper |
+| mappingRules | private | MappingRules | `mapping_rules.json`을 파싱한 객체. 서버 시작 시 로드 (@PostConstruct) |
+| mappingRulesPath | private | String | JSON 파일 경로 (`classpath:docs/mapping_rules.json`) |
+
+**메소드:**
+
+| 메소드명 | 가시성 | 파라미터 | 반환값 | 설명 |
+|----------|--------|---------|--------|------|
+| loadMappingRules | private | | void | @PostConstruct. 서버 시작 시 mapping_rules.json을 읽어 mappingRules에 로드 |
+| getCategories | public | | List\<CategoryInfo\> | 카테고리 목록 반환 (커뮤니케이션, 저장소, 스프레드시트, 웹 수집, 캘린더, AI) |
+| getServicesByCategory | public | String category | List\<ServiceInfo\> | 카테고리별 서비스 목록 반환 |
+| getStartChoices | public | String service | ChoiceResponse | 시작 노드 실행 조건 선택지 (일상 언어). 서비스별로 다른 선택지 제공 |
+| getEndChoices | public | String service | ChoiceResponse | 도착 노드 동작 유형 선택지 |
+| getOptionsForNode | public | String previousOutputType, Map context | ChoiceResponse | **핵심 메서드**. mapping_rules.json에서 해당 데이터 타입 조회 → `requires_processing_method` 확인 → `actions`에서 `applicable_when` 필터링 → `priority` 정렬 → 선택지 반환 |
+| onUserSelect | public | String selectedOptionId, String dataType | NodeSelectionResult | 사용자 선택 처리. `node_type` 결정 + `follow_up`/`branch_config` 있으면 후속 화면 반환 + `output_data_type`으로 다음 노드 준비 |
+| getProcessingMethodChoices | public | String dataType | ChoiceResponse | 1차 처리 방식 선택지. `requires_processing_method`가 true인 데이터 타입의 `processing_method` 반환 |
+| filterByApplicableWhen | private | List\<Action\> actions, Map context | List\<Action\> | `applicable_when` 조건 매칭으로 선택지 필터링 (예: file_subtype이 image일 때만) |
+| resolveOptionsSource | private | Action action, Map context | List\<Option\> | `options_source`가 "fields_from_data" 또는 "fields_from_service"일 때 런타임 데이터에서 선택지 동적 생성 |
+
+**내부 DTO:**
+
+| 클래스명 | 설명 |
+|---------|------|
+| MappingRules | mapping_rules.json 전체 구조를 매핑하는 루트 객체 |
+| DataTypeConfig | data_types의 각 항목 (label, requires_processing_method, processing_method, actions) |
+| Action | actions 배열의 각 항목 (id, label, node_type, output_data_type, priority, applicable_when, follow_up, branch_config) |
+| FollowUp | follow_up 구조 (question, options) |
+| BranchConfig | branch_config 구조 (question, options, multi_select) |
+| NodeSelectionResult | onUserSelect 반환값 (nodeType, outputDataType, followUp, branchConfig) |

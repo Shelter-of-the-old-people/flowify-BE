@@ -46,16 +46,20 @@
 | `templateId` | String | Nullable, ref → templates | 원본 템플릿 ID |
 | `nodes` | List\<NodeDefinition\> | | 노드 목록 (임베디드) |
 | `nodes[].id` | String | Not Null | 노드 고유 ID (e.g., "node_1") |
-| `nodes[].category` | String | Not Null | 노드 카테고리 (service \| processing \| ai) |
+| `nodes[].category` | String | Not Null | 노드 카테고리 (communication \| storage \| spreadsheet \| web_crawl \| calendar \| development \| ai \| processing) |
 | `nodes[].type` | String | Not Null | 노드 타입 (카테고리별 하위 타입) |
 | `nodes[].config` | Map\<String, Object\> | | 노드별 설정 |
 | `nodes[].position` | Position | | 캔버스 좌표 {x, y} |
+| `nodes[].dataType` | String | Nullable | 입력 데이터 타입 (FILE_LIST \| SINGLE_FILE \| TEXT \| SPREADSHEET_DATA \| EMAIL_LIST \| SINGLE_EMAIL \| API_RESPONSE \| SCHEDULE_DATA) |
+| `nodes[].outputDataType` | String | Nullable | 출력 데이터 타입 (노드 처리 결과에 따라 변환될 수 있음). mapping_rules.json의 각 action에 정의된 output_data_type 값 |
+| `nodes[].role` | String | Nullable | 노드 역할 (start \| end \| middle) — 가이드형 생성 흐름에서의 위치 |
+| `nodes[].authWarning` | Boolean | Default: false | 미인증 서비스 경고 여부 (템플릿에서 가져온 노드용) |
 | `edges` | List\<EdgeDefinition\> | | 엣지 목록 (임베디드) |
 | `edges[].source` | String | Not Null | 출발 노드 ID |
 | `edges[].target` | String | Not Null | 도착 노드 ID |
-| `trigger` | TriggerConfig | Nullable | 트리거 설정 (null이면 수동 실행) |
-| `trigger.type` | String | | 트리거 유형 (schedule \| event) |
-| `trigger.config` | Map\<String, Object\> | | 트리거 설정값 (cron 등) |
+| `trigger` | TriggerConfig | Nullable | 실행 조건 설정 (null이면 수동 실행). 시작 노드 설정(UC-W01-A)에서 사용자의 선택에 따라 시스템이 내부적으로 결정한다. |
+| `trigger.type` | String | | 실행 조건 유형 (manual \| schedule \| event) |
+| `trigger.config` | Map\<String, Object\> | | 실행 조건 설정값 (cron, 이벤트 감시 대상 등) |
 | `isActive` | Boolean | Default: true | 트리거 활성화 여부 |
 | `createdAt` | Instant | Auto (@CreatedDate) | 생성 일시 |
 | `updatedAt` | Instant | Auto (@LastModifiedDate) | 수정 일시 |
@@ -127,6 +131,42 @@
 | `finishedAt` | Instant | | 전체 실행 종료 시각 |
 
 **소유 서비스:** 공유 — Spring Boot (조회), FastAPI (기록)
+
+---
+
+### 2.2.6 선택지 매핑 데이터 — JSON 설정 파일
+
+선택지 매핑 규칙은 **DB가 아닌 JSON 설정 파일(`docs/mapping_rules.json`)**로 관리한다. 별도 컬렉션 불필요.
+
+**파일 구조:**
+```
+{
+  "_meta": { version, description, updated_at },
+  "data_types": {
+    "DATA_TYPE_ID": {
+      "label": "표시 이름",
+      "requires_processing_method": true/false,
+      "processing_method": { question, options },
+      "actions": [
+        {
+          "id": "선택지 ID",
+          "label": "표시 텍스트",
+          "node_type": "LOOP | CONDITION_BRANCH | AI | DATA_FILTER | AI_FILTER | PASSTHROUGH",
+          "output_data_type": "출력 데이터 타입",
+          "priority": 1~99,
+          "applicable_when": { 조건 },
+          "follow_up": { question, options },
+          "branch_config": { question, options, multi_select }
+        }
+      ]
+    }
+  },
+  "node_types": { 6가지 노드 타입 정의 },
+  "service_fields": { 서비스별 필드 목록 }
+}
+```
+
+**참조:** `ChoiceMappingService`(DC-C0801)가 이 파일을 읽어 동적 선택지를 제공한다.
 
 ---
 

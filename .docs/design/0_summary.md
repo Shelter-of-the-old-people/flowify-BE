@@ -2,14 +2,16 @@
 
 ## 1. 시스템 개요
 
-Flowify는 비전문가가 AI 자동화 파이프라인을 **코드 없이** 구축할 수 있는 노드 기반 워크플로우 플랫폼이다. **[입력 → AI 처리 → 출력]** 의 3단계 구조로 동작한다.
+Flowify는 비전문가가 AI 자동화 파이프라인을 **코드 없이** 구축할 수 있는 노드 기반 워크플로우 플랫폼이다. **[입력 → AI 처리 → 출력]** 의 3단계 구조로 동작하며, 사용자에게 기술 용어를 노출하지 않고 일상 언어 기반의 가이드형 설정을 제공한다.
 
 Spring Boot 백엔드는 다음을 담당한다:
 - Google OAuth 2.0 SSO 인증 및 JWT 세션 관리
 - 워크플로우 CRUD 및 소유권/공유 관리
+- **가이드형 워크플로우 생성** (시작 노드 → 도착 노드 → 중간 과정 순서)
+- **데이터 타입 기반 동적 선택지 매핑** (ChoiceMappingService → `mapping_rules.json` 설정 파일 기반)
 - 워크플로우 실행을 FastAPI AI 서비스에 위임 및 실행 이력 제공
 - 외부 서비스(Google, Slack, Notion) OAuth 토큰의 암호화 저장/자동 갱신
-- 시스템/사용자 워크플로우 템플릿 관리
+- 시스템/사용자 워크플로우 템플릿 관리 (미인증 서비스 경고 포함)
 
 ---
 
@@ -49,7 +51,7 @@ Spring Boot 백엔드는 다음을 담당한다:
 | `workflow_executions` | 실행 이력 및 노드별 로그 | workflowId, userId | Spring Boot(조회), FastAPI(기록) |
 
 ### 주요 임베디드 구조
-- **workflows.nodes[]**: id, category(service|processing|ai), type, config, position
+- **workflows.nodes[]**: id, category(communication|storage|spreadsheet|web_crawl|calendar|ai|processing), type, config, position, dataType, outputDataType, role(start|end|middle), authWarning
 - **workflows.edges[]**: source, target
 - **workflow_executions.nodeLogs[]**: nodeId, status, inputData, outputData, snapshot, error, startedAt, finishedAt
 
@@ -154,6 +156,15 @@ Spring Boot 백엔드는 다음을 담당한다:
 | POST | `/api/workflows/{id}/share` | 공유 설정 |
 | POST | `/api/workflows/generate` | LLM 기반 워크플로우 자동 생성 (UC-W02) |
 
+### 선택지 및 노드 (UC-W01-D 직접 설정)
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET | `/api/workflows/{id}/choices/{prevNodeId}` | 이전 노드 outputDataType 기반 선택지 조회 |
+| POST | `/api/workflows/{id}/choices/{prevNodeId}/select` | 사용자 선택 전송 → 후속 설정 또는 노드 타입 확정 |
+| POST | `/api/workflows/{id}/nodes` | 확정된 노드 추가 + edge 생성 |
+| PUT | `/api/workflows/{id}/nodes/{nodeId}` | 노드 설정 수정 |
+| DELETE | `/api/workflows/{id}/nodes/{nodeId}` | 노드 삭제 + 캐스케이드 |
+
 ### 실행
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
@@ -203,3 +214,4 @@ Spring Boot 백엔드는 다음을 담당한다:
 2. **Spring Boot** → `HTTP + X-Internal-Token + X-User-ID` → **FastAPI** (실행 위임)
 3. **Spring Boot** ↔ **MongoDB** (사용자, 워크플로우, 토큰, 템플릿 관리)
 4. **FastAPI** → **MongoDB** (실행 이력 기록), **LLM/외부 API** (실제 실행)
+5. **프론트엔드 폴링**: React는 실행 요청 후 주기적으로 실행 상태 API를 호출하여 실시간 진행 상태를 표시한다.

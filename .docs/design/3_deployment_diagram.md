@@ -63,7 +63,7 @@
 │                    ▼                    ▼                                   │
 │  ┌──────────────────────┐  ┌──────────────────────┐                       │
 │  │      MongoDB 7       │  │    Vector Store       │                       │
-│  │  mongodb:27017       │  │    FAISS / Chroma     │                       │
+│  │  mongodb:27017       │  │    Chroma              │                       │
 │  │                      │  │                       │                       │
 │  │  Collections:        │  │  - 문서 임베딩 저장    │                       │
 │  │  - users             │  │  - 유사도 검색         │                       │
@@ -83,7 +83,7 @@
 │                                                                             │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐        │
 │  │  Google  │ │  Slack   │ │  Notion  │ │   LLM    │ │   Web    │        │
-│  │  APIs    │ │   API    │ │   API    │ │ (EXAONE) │ │ Crawling │        │
+│  │  APIs    │ │   API    │ │   API    │ │ (GPT-4o) │ │ Crawling │        │
 │  │          │ │          │ │          │ │          │ │  Targets │        │
 │  │ - Drive  │ │ OAuth2.0 │ │ OAuth2.0 │ │ API Key  │ │  (HTTP)  │        │
 │  │ - Sheets │ │          │ │          │ │          │ │          │        │

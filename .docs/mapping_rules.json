@@ -1,0 +1,676 @@
+{
+  "_meta": {
+    "version": "1.0.0",
+    "description": "Flowify 선택지 매핑 규칙. 데이터 타입별로 사용자에게 보여줄 선택지와 내부 노드 매핑을 정의한다.",
+    "updated_at": "2026-03-30"
+  },
+
+  "data_types": {
+
+    "FILE_LIST": {
+      "label": "파일 목록",
+      "description": "여러 파일이 들어오는 경우",
+      "requires_processing_method": true,
+      "processing_method": {
+        "question": "파일들을 어떻게 처리할까요?",
+        "options": [
+          {
+            "id": "one_by_one",
+            "label": "한 파일씩",
+            "node_type": "LOOP",
+            "output_data_type": "SINGLE_FILE",
+            "priority": 1
+          },
+          {
+            "id": "all_at_once",
+            "label": "전체를 하나로 합쳐서",
+            "node_type": null,
+            "output_data_type": "FILE_LIST",
+            "priority": 2
+          }
+        ]
+      },
+      "actions": []
+    },
+
+    "SINGLE_FILE": {
+      "label": "단일 파일",
+      "description": "하나의 파일이 들어오는 경우",
+      "requires_processing_method": false,
+      "actions": [
+        {
+          "id": "summarize",
+          "label": "내용 요약/정리",
+          "node_type": "AI",
+          "output_data_type": "TEXT",
+          "priority": 1,
+          "follow_up": {
+            "question": "어떻게 요약할까요?",
+            "options": [
+              { "id": "brief", "label": "핵심 3줄 요약" },
+              { "id": "one_paragraph", "label": "한 문단 요약" },
+              { "id": "detailed", "label": "상세 요약" },
+              { "id": "report_style", "label": "보고용 문장" },
+              { "id": "table_style", "label": "표처럼 정리" }
+            ]
+          }
+        },
+        {
+          "id": "describe_image",
+          "label": "이미지 내용 설명 생성",
+          "node_type": "AI",
+          "output_data_type": "TEXT",
+          "priority": 2,
+          "applicable_when": { "file_subtype": ["image"] },
+          "follow_up": {
+            "question": "어떤 설명을 생성할까요?",
+            "options": [
+              { "id": "simple", "label": "간단한 설명" },
+              { "id": "detailed", "label": "상세 설명" }
+            ]
+          }
+        },
+        {
+          "id": "ocr",
+          "label": "이미지 내 텍스트 추출",
+          "node_type": "AI",
+          "output_data_type": "TEXT",
+          "priority": 3,
+          "applicable_when": { "file_subtype": ["image"] }
+        },
+        {
+          "id": "extract_info",
+          "label": "정보 추출 (작성자/날짜/주제 등)",
+          "node_type": "AI",
+          "output_data_type": "TEXT",
+          "priority": 4,
+          "follow_up": {
+            "question": "어떤 정보를 추출할까요?",
+            "options": [
+              { "id": "author_date", "label": "작성자와 날짜" },
+              { "id": "key_numbers", "label": "주요 수치와 성과" },
+              { "id": "action_items", "label": "할 일 목록" },
+              { "id": "custom", "label": "직접 입력", "type": "text_input" }
+            ]
+          }
+        },
+        {
+          "id": "translate",
+          "label": "번역",
+          "node_type": "AI",
+          "output_data_type": "TEXT",
+          "priority": 5,
+          "follow_up": {
+            "question": "어떤 말투로 번역할까요?",
+            "options": [
+              { "id": "formal", "label": "정중하게" },
+              { "id": "casual", "label": "친근하게" },
+              { "id": "concise", "label": "간결하게" }
+            ]
+          }
+        },
+        {
+          "id": "classify_by_type",
+          "label": "파일 종류별로 다르게 처리",
+          "node_type": "CONDITION_BRANCH",
+          "output_data_type": "SINGLE_FILE",
+          "priority": 6,
+          "branch_config": {
+            "question": "어떤 파일 종류를 구분할까요?",
+            "options": [
+              { "id": "pdf", "label": "PDF" },
+              { "id": "image", "label": "이미지" },
+              { "id": "excel", "label": "엑셀" },
+              { "id": "pptx", "label": "PPTX" },
+              { "id": "word", "label": "워드" },
+              { "id": "custom", "label": "직접 입력", "type": "text_input" }
+            ],
+            "multi_select": true
+          }
+        },
+        {
+          "id": "classify_by_content",
+          "label": "내용에 따라 다르게 처리",
+          "node_type": "CONDITION_BRANCH",
+          "output_data_type": "SINGLE_FILE",
+          "priority": 7,
+          "description": "AI가 파일 내용을 판단하여 분류",
+          "branch_config": {
+            "question": "어떤 기준으로 나눌까요?",
+            "options": [
+              { "id": "important_inquiry_ref", "label": "중요 / 문의 / 참고용" },
+              { "id": "important_ref", "label": "중요 / 참고용" },
+              { "id": "custom", "label": "직접 입력", "type": "text_input" }
+            ],
+            "multi_select": true
+          }
+        },
+        {
+          "id": "filter_metadata",
+          "label": "파일 정보만 추출",
+          "node_type": "DATA_FILTER",
+          "output_data_type": "TEXT",
+          "priority": 8,
+          "follow_up": {
+            "question": "어떤 정보를 사용할까요?",
+            "options": [
+              { "id": "filename", "label": "파일명" },
+              { "id": "link", "label": "링크" },
+              { "id": "upload_time", "label": "업로드 시간" },
+              { "id": "file_size", "label": "파일 크기" }
+            ],
+            "multi_select": true
+          }
+        },
+        {
+          "id": "passthrough",
+          "label": "그대로 전달",
+          "node_type": "PASSTHROUGH",
+          "output_data_type": "SINGLE_FILE",
+          "priority": 99
+        }
+      ]
+    },
+
+    "EMAIL_LIST": {
+      "label": "이메일 목록",
+      "description": "여러 이메일이 들어오는 경우",
+      "requires_processing_method": true,
+      "processing_method": {
+        "question": "메일들을 어떻게 처리할까요?",
+        "options": [
+          {
+            "id": "one_by_one",
+            "label": "한 메일씩",
+            "node_type": "LOOP",
+            "output_data_type": "SINGLE_EMAIL",
+            "priority": 1
+          },
+          {
+            "id": "all_at_once",
+            "label": "전체 사용",
+            "node_type": null,
+            "output_data_type": "EMAIL_LIST",
+            "priority": 2
+          }
+        ]
+      },
+      "actions": []
+    },
+
+    "SINGLE_EMAIL": {
+      "label": "단일 이메일",
+      "description": "하나의 이메일이 들어오는 경우",
+      "requires_processing_method": false,
+      "actions": [
+        {
+          "id": "summarize",
+          "label": "내용 요약",
+          "node_type": "AI",
+          "output_data_type": "TEXT",
+          "priority": 1,
+          "follow_up": {
+            "question": "어떻게 요약할까요?",
+            "options": [
+              { "id": "brief_3line", "label": "핵심 3줄 요약" },
+              { "id": "report_style", "label": "보고용 문장" },
+              { "id": "table_style", "label": "표처럼 정리" },
+              { "id": "one_paragraph", "label": "한 문단 요약" }
+            ]
+          }
+        },
+        {
+          "id": "translate",
+          "label": "번역",
+          "node_type": "AI",
+          "output_data_type": "TEXT",
+          "priority": 2,
+          "follow_up": {
+            "question": "어떤 말투로 번역할까요?",
+            "options": [
+              { "id": "formal", "label": "정중하게" },
+              { "id": "casual", "label": "친근하게" },
+              { "id": "concise", "label": "간결하게" }
+            ]
+          }
+        },
+        {
+          "id": "classify_intent",
+          "label": "의도/주제에 따라 분류",
+          "node_type": "AI",
+          "output_data_type": "TEXT",
+          "priority": 3,
+          "description": "AI가 메일 내용을 읽고 의도를 분류. 결과는 텍스트 타입으로 나오며, 이후 조건 분기와 연결 가능."
+        },
+        {
+          "id": "sentiment",
+          "label": "긍정/부정 분류",
+          "node_type": "AI",
+          "output_data_type": "TEXT",
+          "priority": 4
+        },
+        {
+          "id": "urgency",
+          "label": "긴급도 분석",
+          "node_type": "AI",
+          "output_data_type": "TEXT",
+          "priority": 5
+        },
+        {
+          "id": "extract_todos",
+          "label": "할 일 추출",
+          "node_type": "AI",
+          "output_data_type": "TEXT",
+          "priority": 6
+        },
+        {
+          "id": "draft_reply",
+          "label": "답장 초안 작성",
+          "node_type": "AI",
+          "output_data_type": "TEXT",
+          "priority": 7
+        },
+        {
+          "id": "classify_by_content",
+          "label": "내용에 따라 다르게 처리",
+          "node_type": "CONDITION_BRANCH",
+          "output_data_type": "SINGLE_EMAIL",
+          "priority": 8,
+          "branch_config": {
+            "question": "어떤 기준으로 나눌까요?",
+            "options": [
+              { "id": "important_inquiry_ref", "label": "중요 / 문의 / 참고용" },
+              { "id": "important_ref", "label": "중요 / 참고용" },
+              { "id": "custom", "label": "직접 입력", "type": "text_input" }
+            ],
+            "multi_select": true
+          }
+        },
+        {
+          "id": "filter_fields",
+          "label": "필요한 정보만 추출",
+          "node_type": "DATA_FILTER",
+          "output_data_type": "TEXT",
+          "priority": 9,
+          "follow_up": {
+            "question": "어떤 정보를 사용할까요?",
+            "options": [
+              { "id": "subject", "label": "제목" },
+              { "id": "sender", "label": "발신자" },
+              { "id": "date", "label": "수신 날짜" },
+              { "id": "body_preview", "label": "본문 미리보기" }
+            ],
+            "multi_select": true
+          }
+        },
+        {
+          "id": "passthrough",
+          "label": "그대로 전달",
+          "node_type": "PASSTHROUGH",
+          "output_data_type": "SINGLE_EMAIL",
+          "priority": 99
+        }
+      ]
+    },
+
+    "SPREADSHEET_DATA": {
+      "label": "스프레드시트 데이터",
+      "description": "행/열 구조의 데이터",
+      "requires_processing_method": true,
+      "processing_method": {
+        "question": "데이터를 어떻게 처리할까요?",
+        "options": [
+          {
+            "id": "one_by_one",
+            "label": "한 행씩 처리",
+            "node_type": "LOOP",
+            "output_data_type": "SPREADSHEET_DATA",
+            "priority": 1
+          },
+          {
+            "id": "all_at_once",
+            "label": "전체 사용",
+            "node_type": null,
+            "output_data_type": "SPREADSHEET_DATA",
+            "priority": 2
+          }
+        ]
+      },
+      "actions": [
+        {
+          "id": "ai_generate",
+          "label": "맞춤 문서/메일 작성",
+          "node_type": "AI",
+          "output_data_type": "TEXT",
+          "priority": 1,
+          "follow_up": {
+            "question": "어떤 스타일로 작성할까요?",
+            "options": [
+              { "id": "formal", "label": "공식적/비즈니스" },
+              { "id": "casual", "label": "친근한/캐주얼" },
+              { "id": "brief", "label": "간결한 안내" },
+              { "id": "custom", "label": "직접 입력", "type": "text_input" }
+            ]
+          }
+        },
+        {
+          "id": "ai_analyze",
+          "label": "데이터 분석/요약",
+          "node_type": "AI",
+          "output_data_type": "TEXT",
+          "priority": 2,
+          "follow_up": {
+            "question": "어떤 분석을 할까요?",
+            "options": [
+              { "id": "trend", "label": "변화 추이 분석" },
+              { "id": "sentiment", "label": "감정 분석" },
+              { "id": "summary", "label": "짧고 간단하게 요약" },
+              { "id": "one_paragraph", "label": "한 문단 요약" }
+            ]
+          }
+        },
+        {
+          "id": "classify_by_field",
+          "label": "특정 항목별로 다르게 처리",
+          "node_type": "CONDITION_BRANCH",
+          "output_data_type": "SPREADSHEET_DATA",
+          "priority": 3,
+          "branch_config": {
+            "question": "어떤 항목을 기준으로 나눌까요?",
+            "options_source": "fields_from_data",
+            "description": "스프레드시트의 컬럼 목록에서 분기 기준을 선택. 선택한 컬럼의 값에 따라 분기."
+          }
+        },
+        {
+          "id": "filter_condition",
+          "label": "특정 조건에 맞는 것만 사용",
+          "node_type": "DATA_FILTER",
+          "output_data_type": "SPREADSHEET_DATA",
+          "priority": 4,
+          "follow_up": {
+            "question": "어떤 조건으로 걸러낼까요?",
+            "options_source": "fields_from_data",
+            "description": "컬럼 선택 → 조건 설정 (특정 값 이상/이하/포함 등)"
+          }
+        },
+        {
+          "id": "filter_fields",
+          "label": "필요한 항목만 선택",
+          "node_type": "DATA_FILTER",
+          "output_data_type": "SPREADSHEET_DATA",
+          "priority": 5,
+          "follow_up": {
+            "question": "어떤 항목을 사용할까요?",
+            "options_source": "fields_from_data",
+            "multi_select": true
+          }
+        },
+        {
+          "id": "passthrough",
+          "label": "그대로 전달",
+          "node_type": "PASSTHROUGH",
+          "output_data_type": "SPREADSHEET_DATA",
+          "priority": 99
+        }
+      ]
+    },
+
+    "API_RESPONSE": {
+      "label": "API 응답 데이터",
+      "description": "웹 수집 결과 (상품 정보, 뉴스 기사, 영상 정보 등)",
+      "requires_processing_method": false,
+      "actions": [
+        {
+          "id": "filter_fields",
+          "label": "필요한 항목만 선택",
+          "node_type": "DATA_FILTER",
+          "output_data_type": "SPREADSHEET_DATA",
+          "priority": 1,
+          "follow_up": {
+            "question": "어떤 항목을 사용할까요?",
+            "options_source": "fields_from_service",
+            "description": "서비스별 제공 필드에서 선택"
+          }
+        },
+        {
+          "id": "ai_analyze",
+          "label": "AI로 분석/요약",
+          "node_type": "AI",
+          "output_data_type": "TEXT",
+          "priority": 2,
+          "follow_up": {
+            "question": "어떤 분석을 원하시나요?",
+            "options": [
+              { "id": "trend_report", "label": "트렌드 요약 리포트" },
+              { "id": "sentiment", "label": "감성 분석 (긍정/부정)" },
+              { "id": "keyword", "label": "키워드 추출" },
+              { "id": "newsletter", "label": "뉴스레터 형식으로 정리" },
+              { "id": "table_style", "label": "표처럼 정리" },
+              { "id": "one_paragraph", "label": "한 문단 요약" }
+            ]
+          }
+        },
+        {
+          "id": "ai_filter",
+          "label": "조건에 맞는 것만 골라내기",
+          "node_type": "AI_FILTER",
+          "output_data_type": "API_RESPONSE",
+          "priority": 3,
+          "description": "AI가 내용을 판단하여 필터링 (긍정적인 리뷰만, 질문 댓글만 등)",
+          "follow_up": {
+            "question": "어떤 조건으로 골라낼까요?",
+            "options": [
+              { "id": "positive_only", "label": "긍정적인 내용만" },
+              { "id": "negative_only", "label": "부정적인 내용만" },
+              { "id": "questions_only", "label": "질문만" },
+              { "id": "custom", "label": "직접 입력", "type": "text_input" }
+            ]
+          }
+        },
+        {
+          "id": "condition_value",
+          "label": "특정 조건에 맞을 때만 실행",
+          "node_type": "CONDITION_BRANCH",
+          "output_data_type": "API_RESPONSE",
+          "priority": 4,
+          "branch_config": {
+            "question": "어떤 조건을 설정할까요?",
+            "options": [
+              { "id": "price_below", "label": "가격이 기준 이하일 때", "type": "number_input" },
+              { "id": "price_changed", "label": "이전보다 가격이 변했을 때" },
+              { "id": "views_above", "label": "조회수가 기준 이상일 때", "type": "number_input" },
+              { "id": "custom", "label": "직접 입력", "type": "text_input" }
+            ]
+          }
+        },
+        {
+          "id": "loop",
+          "label": "하나씩 처리",
+          "node_type": "LOOP",
+          "output_data_type": "API_RESPONSE",
+          "priority": 5
+        },
+        {
+          "id": "merge",
+          "label": "전체를 하나로 합치기",
+          "node_type": "AI",
+          "output_data_type": "TEXT",
+          "priority": 6
+        },
+        {
+          "id": "passthrough",
+          "label": "그대로 전달",
+          "node_type": "PASSTHROUGH",
+          "output_data_type": "API_RESPONSE",
+          "priority": 99
+        }
+      ]
+    },
+
+    "SCHEDULE_DATA": {
+      "label": "일정 데이터",
+      "description": "캘린더 일정 목록 (제목, 시간, 참석자 등)",
+      "requires_processing_method": false,
+      "actions": [
+        {
+          "id": "ai_summarize",
+          "label": "AI로 정리/요약",
+          "node_type": "AI",
+          "output_data_type": "TEXT",
+          "priority": 1,
+          "follow_up": {
+            "question": "어떻게 정리할까요?",
+            "options": [
+              { "id": "briefing", "label": "친절한 비서처럼 브리핑" },
+              { "id": "timeline", "label": "시간 순서대로 요약" },
+              { "id": "important_only", "label": "중요 일정만 강조" },
+              { "id": "prep_memo", "label": "회의별 준비 메모" },
+              { "id": "report_style", "label": "보고용 문장" },
+              { "id": "table_style", "label": "표처럼 정리" },
+              { "id": "list_style", "label": "리스트로 간결하게" }
+            ]
+          }
+        },
+        {
+          "id": "filter_fields",
+          "label": "필요한 항목만 선택",
+          "node_type": "DATA_FILTER",
+          "output_data_type": "TEXT",
+          "priority": 2,
+          "follow_up": {
+            "question": "어떤 항목을 사용할까요?",
+            "options": [
+              { "id": "title", "label": "일정 제목" },
+              { "id": "start_time", "label": "시작 시간" },
+              { "id": "location", "label": "장소" },
+              { "id": "attendees", "label": "참석자" }
+            ],
+            "multi_select": true
+          }
+        },
+        {
+          "id": "filter_type",
+          "label": "특정 일정만 골라내기",
+          "node_type": "DATA_FILTER",
+          "output_data_type": "SCHEDULE_DATA",
+          "priority": 3,
+          "follow_up": {
+            "question": "어떤 일정만 볼까요?",
+            "options": [
+              { "id": "meetings_only", "label": "회의 일정만" },
+              { "id": "keyword", "label": "특정 단어가 포함된 일정만", "type": "text_input" }
+            ]
+          }
+        },
+        {
+          "id": "classify",
+          "label": "종류별로 다르게 처리",
+          "node_type": "CONDITION_BRANCH",
+          "output_data_type": "SCHEDULE_DATA",
+          "priority": 4,
+          "branch_config": {
+            "question": "어떤 기준으로 나눌까요?",
+            "options": [
+              { "id": "important_ref", "label": "중요 / 참고용" },
+              { "id": "internal_external", "label": "내부 / 외부 미팅" },
+              { "id": "custom", "label": "직접 입력", "type": "text_input" }
+            ]
+          }
+        },
+        {
+          "id": "passthrough",
+          "label": "그대로 전달",
+          "node_type": "PASSTHROUGH",
+          "output_data_type": "SCHEDULE_DATA",
+          "priority": 99
+        }
+      ]
+    },
+
+    "TEXT": {
+      "label": "텍스트",
+      "description": "AI 요약 결과, 변환된 텍스트, 단일 문자열 등",
+      "requires_processing_method": false,
+      "actions": [
+        {
+          "id": "ai_refine",
+          "label": "다시 정리/다듬기",
+          "node_type": "AI",
+          "output_data_type": "TEXT",
+          "priority": 1,
+          "follow_up": {
+            "question": "어떻게 다듬을까요?",
+            "options": [
+              { "id": "shorter", "label": "더 짧게 줄이기" },
+              { "id": "report_style", "label": "보고용 문장으로" },
+              { "id": "table_style", "label": "표처럼 정리" },
+              { "id": "newsletter", "label": "뉴스레터 스타일로" },
+              { "id": "blog", "label": "블로그 포스팅용으로" },
+              { "id": "key_points", "label": "핵심만 짧게" },
+              { "id": "custom", "label": "직접 입력", "type": "text_input" }
+            ]
+          }
+        },
+        {
+          "id": "classify_by_content",
+          "label": "내용에 따라 다르게 처리",
+          "node_type": "CONDITION_BRANCH",
+          "output_data_type": "TEXT",
+          "priority": 2,
+          "description": "이전 AI 분류 결과를 기반으로 분기",
+          "branch_config": {
+            "question": "어떤 기준으로 나눌까요?",
+            "options": [
+              { "id": "positive_negative", "label": "긍정 / 부정" },
+              { "id": "important_ref", "label": "중요 / 참고용" },
+              { "id": "important_check_ref", "label": "중요 / 확인 필요 / 참고용" },
+              { "id": "custom", "label": "직접 입력", "type": "text_input" }
+            ],
+            "multi_select": true
+          }
+        },
+        {
+          "id": "filter_content",
+          "label": "필요한 부분만 추출",
+          "node_type": "DATA_FILTER",
+          "output_data_type": "TEXT",
+          "priority": 3,
+          "follow_up": {
+            "question": "어떤 부분을 추출할까요?",
+            "options": [
+              { "id": "title_key", "label": "제목과 핵심만" },
+              { "id": "key_only", "label": "핵심만" },
+              { "id": "important_sentences", "label": "중요한 문장만" },
+              { "id": "title_link", "label": "제목과 링크만" },
+              { "id": "custom", "label": "직접 입력", "type": "text_input" }
+            ]
+          }
+        },
+        {
+          "id": "passthrough",
+          "label": "그대로 전달",
+          "node_type": "PASSTHROUGH",
+          "output_data_type": "TEXT",
+          "priority": 99
+        }
+      ]
+    }
+  },
+
+  "node_types": {
+    "LOOP": { "label": "Loop", "description": "목록형 데이터를 한 건씩 반복 처리" },
+    "CONDITION_BRANCH": { "label": "조건 분기", "description": "조건에 따라 경로를 분리" },
+    "AI": { "label": "AI 처리", "description": "LLM 기반 데이터 가공 (요약, 번역, 분석 등)" },
+    "DATA_FILTER": { "label": "데이터 필터", "description": "특정 필드/조건으로 데이터 선별" },
+    "AI_FILTER": { "label": "AI 필터", "description": "AI가 내용을 판단하여 필터링" },
+    "PASSTHROUGH": { "label": "패스스루", "description": "변환 없이 그대로 전달" }
+  },
+
+  "service_fields": {
+    "쿠팡": ["상품명", "가격", "평점", "리뷰 수", "URL", "배송 정보"],
+    "네이버 뉴스": ["뉴스 제목", "언론사", "발행 시간", "링크", "요약문"],
+    "유튜브": ["영상 제목", "채널명", "조회수", "게시일", "영상 링크"],
+    "Google Calendar": ["일정 제목", "시작 시간", "종료 시간", "장소", "참석자", "메모"],
+    "GitHub": ["변경 파일", "커밋 메시지", "작성자", "PR 링크"]
+  }
+}

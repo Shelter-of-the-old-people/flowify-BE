@@ -62,9 +62,9 @@
 
 DTO:
 ┌──────────────────────┐  ┌─────────────────────────┐
-│    LoginResponse     │  │  TokenRefreshRequest     │
+│    LoginResponse     │  │  TokenRefreshRequest    │
 ├──────────────────────┤  ├─────────────────────────┤
-│ - accessToken        │  │ - refreshToken: String   │
+│ - accessToken        │  │ - refreshToken: String  │
 │ - refreshToken       │  └─────────────────────────┘
 │ - user: UserResponse │
 └──────────────────────┘
@@ -142,6 +142,11 @@ DTO:
 │ + deleteWorkflow()                 │
 │ + shareWorkflow()                  │
 │ + generateWorkflow()               │
+│ + getNodeChoices()                 │  ← 이전 노드 기반 선택지 조회
+│ + selectNodeChoice()               │  ← 사용자 선택 전송
+│ + addMiddleNode()                  │  ← 확정된 중간 노드 추가
+│ + updateNode()                     │  ← 노드 설정 수정
+│ + deleteNode()                     │  ← 노드 삭제 + 캐스케이드
 └──────────┬─────────────────────────┘
            │ uses
            ▼
@@ -149,9 +154,10 @@ DTO:
 │        <<@Service>>                │──────▶│   WorkflowValidator       │
 │        WorkflowService             │       ├───────────────────────────┤
 ├────────────────────────────────────┤       │ + validate()              │
-│ - workflowRepository              │       │ - checkCyclicReference()  │
-│ - workflowValidator               │       │ - checkIsolatedNodes()    │
+│ - workflowRepository               │       │ - checkCyclicReference()  │
+│ - workflowValidator                │       │ - checkIsolatedNodes()    │
 │ - fastApiClient                    │       │ - checkRequiredConfig()   │
+│ - choiceMappingService             │       │ - checkDataTypeCompat()   │
 ├────────────────────────────────────┤       └───────────────────────────┘
 │ + createWorkflow()                 │
 │ + getWorkflowsByUserId()           │
@@ -160,8 +166,17 @@ DTO:
 │ + deleteWorkflow()                 │
 │ + shareWorkflow()                  │
 │ + generateWorkflowFromPrompt()     │
-│ - verifyOwnership()               │
+│ + setupStartNode()                 │  ← 시작 노드 설정 (UC-W01-A)
+│ + setupEndNode()                   │  ← 도착 노드 설정 (UC-W01-B)
+│ + getNodeChoices()                 │  ← NEW: 이전 노드 기반 선택지 조회
+│ + selectNodeChoice()               │  ← NEW: 사용자 선택 처리
+│ + addMiddleNode()                  │  ← 중간 노드 추가 (UC-W01-D)
+│ + updateNode()                     │  ← NEW: 노드 설정 수정
+│ + deleteNodeCascade()              │  ← 노드 삭제 + 후속 노드 캐스케이드 삭제
+│ + chatGenerateWorkflow()           │  ← 채팅형 AI 생성 (UC-W02)
+│ - verifyOwnership()                │
 │ - verifyAccess()                   │
+│ - determineNodeType()              │  ← 사용자 선택 → 내부 노드 타입 결정
 └──────────┬─────────────────────────┘
            │ uses
            ▼
@@ -174,19 +189,19 @@ DTO:
 └──────────┬─────────────────────────┘
            │ manages
            ▼
-┌────────────────────────────┐  ┌───────────────────┐  ┌───────────────────┐
-│     <<@Document>>          │  │  NodeDefinition   │  │  EdgeDefinition   │
-│       Workflow             │  ├───────────────────┤  ├───────────────────┤
-├────────────────────────────┤  │ - id: String      │  │ - source: String  │
-│ - id: String               │  │ - category: String│  │ - target: String  │
-│ - name: String             │  │ - type: String    │  └───────────────────┘
-│ - description: String      │  │ - config: Map     │
-│ - userId: String           │  │ - position: Pos.  │
-│ - sharedWith: List<String> │  └───────────────────┘
-│ - isTemplate: boolean      │
-│ - templateId: String       │
-│ - nodes: List<NodeDef.>    │
-│ - edges: List<EdgeDef.>    │
+┌────────────────────────────┐  ┌─────────────────────────┐  ┌───────────────────┐
+│     <<@Document>>          │  │    NodeDefinition       │  │  EdgeDefinition   │
+│       Workflow             │  ├─────────────────────────┤  ├───────────────────┤
+├────────────────────────────┤  │ - id: String            │  │ - source: String  │
+│ - id: String               │  │ - category: String      │  │ - target: String  │
+│ - name: String             │  │ - type: String          │  └───────────────────┘
+│ - description: String      │  │ - config: Map           │
+│ - userId: String           │  │ - position: Position    │
+│ - sharedWith: List<String> │  │ - dataType: String      │  ← 입력 데이터 타입
+│ - isTemplate: boolean      │  │ - outputDataType: String│  ← 출력 데이터 타입
+│ - templateId: String       │  │ - role: String          │  ← start|end|middle
+│ - nodes: List<NodeDef.>    │  │ - authWarning: boolean  │  ← 미인증 경고
+│ - edges: List<EdgeDef.>    │  └─────────────────────────┘
 │ - trigger: TriggerConfig   │
 │ - isActive: boolean        │
 │ - createdAt: Instant       │
@@ -487,4 +502,58 @@ Configuration:
 ├──────────────────────────┤  ├──────────────────────┤  ├──────────────────────┤
 │ + corsFilter()           │  │ + webClient()        │  │ @EnableMongoAuditing │
 └──────────────────────────┘  └──────────────────────┘  └──────────────────────┘
+```
+
+---
+
+## PK-C08: 선택지 매핑 시스템
+
+> **NEW**: update.md의 선택지 매핑 시스템 요구사항에 따라 추가.
+
+| 항목 | 내용 |
+|------|------|
+| **클래스 다이어그램 식별자** | PK-C08 |
+| **클래스 다이어그램 명** | 선택지 매핑 시스템 |
+
+```
+┌──────────────────────────────────────────────────────┐
+│            <<@Service>>                              │
+│         ChoiceMappingService                         │
+├──────────────────────────────────────────────────────┤
+│ - objectMapper: ObjectMapper                         │
+│ - mappingRules: MappingRules                         │  ← mapping_rules.json 파싱 결과
+│ - mappingRulesPath: String                           │  ← classpath:docs/mapping_rules.json
+├──────────────────────────────────────────────────────┤
+│ - loadMappingRules()                                 │  ← @PostConstruct: JSON 파일 로드
+│ + getCategories()                                    │  ← 카테고리 목록
+│ + getServicesByCategory(category: String)            │  ← 카테고리별 서비스 목록
+│ + getStartChoices(service: String)                   │  ← 시작 노드 실행 조건 선택지
+│ + getEndChoices(service: String)                     │  ← 도착 노드 동작 유형 선택지
+│ + getOptionsForNode(prevOutputType, context: Map)    │  ← 핵심: 데이터 타입별 선택지 조회
+│ + onUserSelect(optionId, dataType: String)           │  ← 선택 처리 → 노드 타입 + 후속 설정
+│ + getProcessingMethodChoices(dataType: String)       │  ← 1차: 처리 방식 ("한 건씩"/"전체")
+│ - filterByApplicableWhen(actions, context: Map)      │  ← applicable_when 조건 필터링
+│ - resolveOptionsSource(action, context: Map)         │  ← 동적 선택지 생성 (fields_from_data 등)
+└──────────────────────────────────────────────────────┘
+
+내부 DTO:
+┌───────────────────────────┐  ┌───────────────────────────┐  ┌───────────────────────────┐
+│    MappingRules           │  │    DataTypeConfig         │  │    Action                 │
+├───────────────────────────┤  ├───────────────────────────┤  ├───────────────────────────┤
+│ - meta: Meta              │  │ - label: String           │  │ - id: String              │
+│ - dataTypes: Map<>        │  │ - requiresProcessing:bool │  │ - label: String           │
+│ - nodeTypes: Map<>        │  │ - processingMethod: PM    │  │ - nodeType: String        │
+│ - serviceFields: Map<>    │  │ - actions: List<Action>   │  │ - outputDataType: String  │
+└───────────────────────────┘  └───────────────────────────┘  │ - priority: int           │
+                                                              │ - applicableWhen: Map     │
+┌───────────────────────────┐  ┌───────────────────────────┐  │ - followUp: FollowUp      │
+│    FollowUp               │  │    NodeSelectionResult    │  │ - branchConfig: BranchCfg │
+├───────────────────────────┤  ├───────────────────────────┤  └───────────────────────────┘
+│ - question: String        │  │ - nodeType: String        │
+│ - options: List<Option>   │  │ - outputDataType: String  │
+└───────────────────────────┘  │ - followUp: FollowUp      │
+                               │ - branchConfig: BranchCfg │
+                               └───────────────────────────┘
+
+노드 타입 (6가지): LOOP | CONDITION_BRANCH | AI | DATA_FILTER | AI_FILTER | PASSTHROUGH
 ```
