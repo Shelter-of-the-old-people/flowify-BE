@@ -7,7 +7,12 @@ class NodeDefinition(BaseModel):
     id: str
     type: str
     config: dict = Field(default_factory=dict)
-    position: dict = Field(default_factory=dict)
+    position: dict = Field(default_factory=lambda: {"x": 0, "y": 0})
+    category: str | None = None
+    data_type: str | None = None
+    output_data_type: str | None = None
+    role: str | None = None
+    auth_warning: bool = False
 
 
 class EdgeDefinition(BaseModel):

@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     NOTION_INTEGRATION_TOKEN: str = ""
     GITHUB_TOKEN: str = ""
 
+    INTERNAL_API_SECRET: str = ""
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 

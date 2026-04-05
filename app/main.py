@@ -3,7 +3,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.v1.middleware import InternalAuthMiddleware
 from app.api.v1.router import api_router
+from app.common.errors import FlowifyException, flowify_exception_handler, generic_exception_handler
 from app.config import settings
 from app.db.mongodb import close_mongo_connection, connect_to_mongo
 
@@ -24,6 +26,10 @@ app = FastAPI(
     redoc_url="/redoc" if settings.APP_DEBUG else None,
 )
 
+app.add_exception_handler(FlowifyException, flowify_exception_handler)
+app.add_exception_handler(Exception, generic_exception_handler)
+
+app.add_middleware(InternalAuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
