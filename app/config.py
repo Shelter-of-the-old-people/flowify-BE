@@ -1,4 +1,8 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings
+
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
@@ -10,7 +14,7 @@ class Settings(BaseSettings):
     MONGODB_URL: str = "mongodb://localhost:27017"
     MONGODB_DB_NAME: str = "flowify"
 
-    LLM_MODEL_NAME: str = "EXAONE-3.0-7.8B-Instruct"
+    LLM_MODEL_NAME: str = "gpt-4o"
     LLM_API_KEY: str = ""
 
     GOOGLE_CLIENT_ID: str = ""
@@ -22,7 +26,7 @@ class Settings(BaseSettings):
 
     INTERNAL_API_SECRET: str = ""
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": str(BASE_DIR / ".env"), "env_file_encoding": "utf-8"}
 
 
 settings = Settings()
