@@ -41,7 +41,17 @@ async def classify(request: LLMProcessRequest):
 
 @router.post("/generate-workflow", response_model=GenerateWorkflowResponse)
 async def generate_workflow(request: GenerateWorkflowRequest):
-    """LLM 기반 워크플로우 자동 생성 (UC-W02)."""
+    """LLM 기반 워크플로우 자동 생성 (UC-W02).
+
+    Spring Boot WorkflowCreateRequest 호환 형식으로 반환합니다.
+    POST /api/v1/workflows/generate 와 동일한 LLM 로직을 사용합니다.
+    """
     service = _get_llm_service()
-    result = await service.generate_workflow(request.prompt, context=request.context)
-    return GenerateWorkflowResponse(result=result)
+    result = await service.generate_workflow(request.prompt)
+    return GenerateWorkflowResponse(
+        name=result.get("name", "AI 생성 워크플로우"),
+        description=result.get("description"),
+        nodes=result.get("nodes", []),
+        edges=result.get("edges", []),
+        trigger=result.get("trigger", {"type": "manual", "config": {}}),
+    )

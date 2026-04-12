@@ -25,6 +25,16 @@ class WorkflowExecutor:
     """워크플로우 실행 엔진.
 
     edges 기반 토폴로지 정렬, 스냅샷, MongoDB 로깅, IfElse 분기 처리를 지원합니다.
+
+    MongoDB `workflow_executions` 컬렉션 스키마:
+        _id          : executionId (문자열 — Spring Boot 명세 일치)
+        workflowId   : str
+        userId       : str
+        state        : "running" | "completed" | "failed" | "rollback_available"
+        nodeLogs     : list[NodeExecutionLog]
+        errorMessage : str | null
+        startedAt    : ISO8601
+        finishedAt   : ISO8601 | null
     """
 
     def __init__(self, db: AsyncIOMotorDatabase):
@@ -38,18 +48,17 @@ class WorkflowExecutor:
         user_id: str,
         nodes: list[NodeDefinition],
         edges: list[EdgeDefinition],
-        credentials: dict,
+        service_tokens: dict,
     ) -> WorkflowExecution:
         state_manager = WorkflowStateManager()
         snapshot_manager = SnapshotManager()
         node_map = {n.id: n for n in nodes}
 
         execution = WorkflowExecution(
-            id=execution_id,
-            workflow_id=workflow_id,
-            user_id=user_id,
+            workflowId=workflow_id,
+            userId=user_id,
             state=WorkflowState.PENDING,
-            started_at=datetime.utcnow(),
+            startedAt=datetime.utcnow(),
         )
 
         # edges -> 토폴로지 정렬로 실행 순서 결정
@@ -61,20 +70,20 @@ class WorkflowExecutor:
 
         state_manager.transition(WorkflowState.RUNNING)
         execution.state = WorkflowState.RUNNING
-        await self._save_execution(execution)
+        await self._save_execution(execution_id, execution)
 
-        data: dict = {"credentials": credentials}
+        # service_tokens를 실행 데이터에 포함 (노드에서 credentials로 접근 가능)
+        data: dict = {"credentials": service_tokens}
         skipped_nodes: set[str] = set()
 
         for node_id in execution_order:
             if node_id in skipped_nodes:
-                # 분기에 의해 skip된 노드
-                execution.node_logs.append(
+                execution.nodeLogs.append(
                     NodeExecutionLog(
-                        node_id=node_id,
+                        nodeId=node_id,
                         status="skipped",
-                        started_at=datetime.utcnow(),
-                        finished_at=datetime.utcnow(),
+                        startedAt=datetime.utcnow(),
+                        finishedAt=datetime.utcnow(),
                     )
                 )
                 continue
@@ -83,34 +92,32 @@ class WorkflowExecutor:
             node_log = await self._execute_node(
                 node_def, data, snapshot_manager
             )
-            execution.node_logs.append(node_log)
+            execution.nodeLogs.append(node_log)
 
             if node_log.status == "failed":
                 # 실패 시: 이후 모든 노드 skip
-                remaining = set(execution_order) - {
-                    log.node_id for log in execution.node_logs
-                }
+                logged_ids = {log.nodeId for log in execution.nodeLogs}
                 for rem_id in execution_order:
-                    if rem_id in remaining:
-                        execution.node_logs.append(
+                    if rem_id not in logged_ids:
+                        execution.nodeLogs.append(
                             NodeExecutionLog(
-                                node_id=rem_id,
+                                nodeId=rem_id,
                                 status="skipped",
-                                started_at=datetime.utcnow(),
-                                finished_at=datetime.utcnow(),
+                                startedAt=datetime.utcnow(),
+                                finishedAt=datetime.utcnow(),
                             )
                         )
 
                 state_manager.transition(WorkflowState.FAILED)
                 state_manager.transition(WorkflowState.ROLLBACK_AVAILABLE)
                 execution.state = WorkflowState.ROLLBACK_AVAILABLE
-                execution.error_message = node_log.error.message if node_log.error else "노드 실행 실패"
-                execution.finished_at = datetime.utcnow()
-                await self._save_execution(execution)
+                execution.errorMessage = node_log.error.message if node_log.error else "노드 실행 실패"
+                execution.finishedAt = datetime.utcnow()
+                await self._save_execution(execution_id, execution)
                 return execution
 
             # 성공 시 output을 다음 데이터로 전파
-            data = node_log.output_data
+            data = node_log.outputData
 
             # IfElse 분기 처리: branch 값에 따라 반대쪽 서브트리 skip
             if node_def.type == "if_else" and "branch" in data:
@@ -125,8 +132,8 @@ class WorkflowExecutor:
 
         state_manager.transition(WorkflowState.SUCCESS)
         execution.state = WorkflowState.SUCCESS
-        execution.finished_at = datetime.utcnow()
-        await self._save_execution(execution)
+        execution.finishedAt = datetime.utcnow()
+        await self._save_execution(execution_id, execution)
         return execution
 
     async def _execute_node(
@@ -137,6 +144,7 @@ class WorkflowExecutor:
     ) -> NodeExecutionLog:
         """단일 노드 실행. 스냅샷 저장, 타이밍 측정, 에러 캐치."""
         started_at = datetime.utcnow()
+        start_time = time.monotonic()
 
         # 실행 전 스냅샷 저장
         snapshot_data = self._strip_credentials(input_data)
@@ -144,67 +152,70 @@ class WorkflowExecutor:
 
         try:
             node = self._factory.create(node_def.type, node_def.config)
-            start_time = time.monotonic()
             output_data = await node.execute(input_data)
-            duration_ms = int((time.monotonic() - start_time) * 1000)
 
             return NodeExecutionLog(
-                node_id=node_def.id,
+                nodeId=node_def.id,
                 status="success",
-                input_data=self._strip_credentials(input_data),
-                output_data=self._strip_credentials(output_data),
+                inputData=self._strip_credentials(input_data),
+                outputData=self._strip_credentials(output_data),
                 snapshot=NodeSnapshot(
-                    captured_at=started_at,
-                    state_data=snapshot_data,
+                    capturedAt=started_at,
+                    stateData=snapshot_data,
                 ),
-                duration_ms=duration_ms,
-                started_at=started_at,
-                finished_at=datetime.utcnow(),
+                startedAt=started_at,
+                finishedAt=datetime.utcnow(),
             )
 
         except FlowifyException as e:
             return NodeExecutionLog(
-                node_id=node_def.id,
+                nodeId=node_def.id,
                 status="failed",
-                input_data=self._strip_credentials(input_data),
+                inputData=self._strip_credentials(input_data),
                 snapshot=NodeSnapshot(
-                    captured_at=started_at,
-                    state_data=snapshot_data,
+                    capturedAt=started_at,
+                    stateData=snapshot_data,
                 ),
                 error=ErrorDetail(
                     code=e.error_code.name,
                     message=e.detail,
-                    stack_trace=traceback.format_exc() if settings.APP_DEBUG else None,
+                    stackTrace=traceback.format_exc() if settings.APP_DEBUG else None,
                 ),
-                duration_ms=int((time.monotonic() - start_time) * 1000),
-                started_at=started_at,
-                finished_at=datetime.utcnow(),
+                startedAt=started_at,
+                finishedAt=datetime.utcnow(),
             )
 
         except Exception as e:
             return NodeExecutionLog(
-                node_id=node_def.id,
+                nodeId=node_def.id,
                 status="failed",
-                input_data=self._strip_credentials(input_data),
+                inputData=self._strip_credentials(input_data),
                 snapshot=NodeSnapshot(
-                    captured_at=started_at,
-                    state_data=snapshot_data,
+                    capturedAt=started_at,
+                    stateData=snapshot_data,
                 ),
                 error=ErrorDetail(
                     code=ErrorCode.NODE_EXECUTION_FAILED.name,
                     message=str(e),
-                    stack_trace=traceback.format_exc() if settings.APP_DEBUG else None,
+                    stackTrace=traceback.format_exc() if settings.APP_DEBUG else None,
                 ),
-                duration_ms=int((time.monotonic() - start_time) * 1000),
-                started_at=started_at,
-                finished_at=datetime.utcnow(),
+                startedAt=started_at,
+                finishedAt=datetime.utcnow(),
             )
 
-    async def _save_execution(self, execution: WorkflowExecution) -> None:
-        """실행 상태를 MongoDB에 upsert합니다."""
+    async def _save_execution(self, execution_id: str, execution: WorkflowExecution) -> None:
+        """실행 상태를 MongoDB에 upsert합니다.
+
+        _id를 executionId로 설정합니다 (Spring Boot 명세 기준).
+        """
         doc = execution.model_dump(mode="json")
+        # state enum -> 문자열 변환
+        doc["state"] = execution.state.value if hasattr(execution.state, "value") else execution.state
+        # _id를 executionId로 명시적으로 설정
+        doc["_id"] = execution_id
+
         await self._db.workflow_executions.update_one(
-            {"id": execution.id},
+            {"_id": execution_id},
             {"$set": doc},
             upsert=True,
         )

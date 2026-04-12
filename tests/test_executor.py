@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from app.core.engine.executor import WorkflowExecutor
 from app.core.engine.state import WorkflowState
@@ -103,12 +103,12 @@ class TestExecuteWorkflow:
             user_id="usr_1",
             nodes=nodes,
             edges=edges,
-            credentials={"google": "token"},
+            service_tokens={"google": "token"},
         )
 
         assert result.state == WorkflowState.SUCCESS
-        assert len(result.node_logs) == 3
-        assert all(log.status == "success" for log in result.node_logs)
+        assert len(result.nodeLogs) == 3
+        assert all(log.status == "success" for log in result.nodeLogs)
 
     @pytest.mark.asyncio
     async def test_node_failure_marks_rollback_available(self, mock_db):
@@ -135,13 +135,13 @@ class TestExecuteWorkflow:
             user_id="usr_1",
             nodes=nodes,
             edges=edges,
-            credentials={},
+            service_tokens={},
         )
 
         assert result.state == WorkflowState.ROLLBACK_AVAILABLE
-        assert result.node_logs[0].status == "success"
-        assert result.node_logs[1].status == "failed"
-        assert result.node_logs[2].status == "skipped"
+        assert result.nodeLogs[0].status == "success"
+        assert result.nodeLogs[1].status == "failed"
+        assert result.nodeLogs[2].status == "skipped"
 
     @pytest.mark.asyncio
     async def test_credentials_stripped_from_logs(self, mock_db):
@@ -160,12 +160,12 @@ class TestExecuteWorkflow:
             user_id="usr_1",
             nodes=nodes,
             edges=edges,
-            credentials={"google": "secret_token"},
+            service_tokens={"google": "secret_token"},
         )
 
-        log = result.node_logs[0]
-        assert "credentials" not in log.input_data
-        assert "credentials" not in log.output_data
+        log = result.nodeLogs[0]
+        assert "credentials" not in log.inputData
+        assert "credentials" not in log.outputData
 
 
 class TestGenerateExecutionId:

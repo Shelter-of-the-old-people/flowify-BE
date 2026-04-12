@@ -24,7 +24,13 @@ def client():
         mock_service.summarize = AsyncMock(return_value="요약 결과")
         mock_service.classify = AsyncMock(return_value="분류 결과")
         mock_service.generate_workflow = AsyncMock(
-            return_value={"nodes": [{"id": "node_1", "type": "input"}], "edges": []}
+            return_value={
+                "name": "테스트 워크플로우",
+                "description": "테스트 설명",
+                "nodes": [{"id": "node_1", "type": "input", "category": "trigger", "config": {}, "position": {"x": 0, "y": 0}, "role": "start", "authWarning": False}],
+                "edges": [],
+                "trigger": {"type": "manual", "config": {}},
+            }
         )
         mock_factory.return_value = mock_service
 
@@ -85,9 +91,11 @@ def test_generate_workflow_endpoint(client):
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert "result" in data
-    assert "nodes" in data["result"]
-    assert "edges" in data["result"]
+    # Spring Boot WorkflowCreateRequest 호환 형식
+    assert "name" in data
+    assert "nodes" in data
+    assert "edges" in data
+    assert "trigger" in data
 
 
 def test_generate_workflow_with_context(client):

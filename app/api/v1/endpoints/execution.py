@@ -8,9 +8,16 @@ from app.models.requests import RollbackRequest, RollbackResponse
 
 router = APIRouter()
 
+# Spring Boot 명세 기준: 이 두 상태에서만 롤백 허용
+_ROLLBACK_ALLOWED_STATES = {
+    WorkflowState.ROLLBACK_AVAILABLE.value,
+    WorkflowState.FAILED.value,
+}
+
 
 async def _get_execution_doc(db: AsyncIOMotorDatabase, execution_id: str) -> dict:
-    doc = await db.workflow_executions.find_one({"id": execution_id})
+    """MongoDB에서 실행 문서를 조회합니다. _id 기준으로 검색."""
+    doc = await db.workflow_executions.find_one({"_id": execution_id})
     if not doc:
         raise FlowifyException(
             ErrorCode.EXECUTION_NOT_FOUND,
@@ -26,7 +33,7 @@ async def get_execution_status(
 ) -> dict:
     """워크플로우 실행 상태를 조회합니다."""
     doc = await _get_execution_doc(db, execution_id)
-    node_logs = doc.get("node_logs", [])
+    node_logs = doc.get("nodeLogs", [])
     completed = sum(1 for log in node_logs if log.get("status") in ("success", "failed", "skipped"))
     total = len(node_logs)
 
@@ -34,22 +41,22 @@ async def get_execution_status(
     current_node = None
     for log in node_logs:
         if log.get("status") == "running":
-            current_node = log.get("node_id")
+            current_node = log.get("nodeId")
             break
     if not current_node and node_logs:
-        current_node = node_logs[-1].get("node_id")
+        current_node = node_logs[-1].get("nodeId")
 
     return {
-        "execution_id": doc["id"],
-        "workflow_id": doc["workflow_id"],
-        "status": doc["state"],
+        "execution_id": str(doc["_id"]),
+        "workflow_id": doc.get("workflowId"),
+        "status": doc.get("state"),
         "current_node": current_node,
         "progress": {
             "total_nodes": total,
             "completed_nodes": completed,
         },
-        "started_at": doc.get("started_at"),
-        "finished_at": doc.get("finished_at"),
+        "started_at": doc.get("startedAt"),
+        "finished_at": doc.get("finishedAt"),
     }
 
 
@@ -62,12 +69,12 @@ async def get_execution_logs(
     doc = await _get_execution_doc(db, execution_id)
 
     return {
-        "execution_id": doc["id"],
-        "workflow_id": doc["workflow_id"],
-        "status": doc["state"],
-        "started_at": doc.get("started_at"),
-        "finished_at": doc.get("finished_at"),
-        "node_logs": doc.get("node_logs", []),
+        "execution_id": str(doc["_id"]),
+        "workflow_id": doc.get("workflowId"),
+        "status": doc.get("state"),
+        "started_at": doc.get("startedAt"),
+        "finished_at": doc.get("finishedAt"),
+        "node_logs": doc.get("nodeLogs", []),
     }
 
 
@@ -77,11 +84,17 @@ async def rollback_execution(
     body: RollbackRequest | None = None,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ) -> RollbackResponse:
-    """실패한 워크플로우를 스냅샷으로 롤백합니다."""
+    """실패한 워크플로우를 스냅샷으로 롤백합니다.
+
+    Spring Boot 명세:
+        - 허용 상태: "rollback_available" 또는 "failed"
+        - 요청 바디: { "node_id": "string | null" }
+        - HTTP 2xx 응답이면 성공 (응답 바디는 Spring Boot에서 무시)
+    """
     doc = await _get_execution_doc(db, execution_id)
 
     current_state = doc.get("state")
-    if current_state != WorkflowState.ROLLBACK_AVAILABLE.value:
+    if current_state not in _ROLLBACK_ALLOWED_STATES:
         raise FlowifyException(
             ErrorCode.ROLLBACK_UNAVAILABLE,
             detail=f"현재 상태({current_state})에서는 롤백할 수 없습니다.",
@@ -89,14 +102,14 @@ async def rollback_execution(
         )
 
     # 롤백 대상 노드 결정
-    node_logs = doc.get("node_logs", [])
-    target_node_id = body.target_node_id if body else None
+    node_logs = doc.get("nodeLogs", [])
+    target_node_id = body.node_id if body else None
 
     if not target_node_id:
         # 마지막 성공 노드 찾기
         for log in reversed(node_logs):
             if log.get("status") == "success":
-                target_node_id = log.get("node_id")
+                target_node_id = log.get("nodeId")
                 break
 
     if not target_node_id:
@@ -107,7 +120,7 @@ async def rollback_execution(
 
     # 상태를 PENDING으로 전환
     await db.workflow_executions.update_one(
-        {"id": execution_id},
+        {"_id": execution_id},
         {"$set": {"state": WorkflowState.PENDING.value}},
     )
 

@@ -2,28 +2,67 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from app.models.workflow import EdgeDefinition, NodeDefinition
+from app.models.workflow import WorkflowDefinition
 
 
 # ── 워크플로우 실행 ──
 
 
 class WorkflowExecuteRequest(BaseModel):
-    workflow_id: str
-    user_id: str
-    credentials: dict = Field(default_factory=dict)
-    nodes: list[NodeDefinition]
-    edges: list[EdgeDefinition] = Field(default_factory=list)
+    """Spring Boot가 /api/v1/workflows/{workflowId}/execute 로 보내는 요청 바디.
+
+    구조:
+        {
+            "workflow": { ...WorkflowDefinition... },
+            "service_tokens": { "gmail": "ya29...", "slack": "xoxb-..." }
+        }
+
+    service_tokens 키: NodeDefinition.type (category == "service" 인 노드만)
+    service_tokens 값: OAuth 액세스 토큰 복호화 평문
+    """
+
+    workflow: WorkflowDefinition
+    service_tokens: dict[str, str] = Field(default_factory=dict)
 
 
 class ExecutionResult(BaseModel):
+    """워크플로우 실행 시작 응답. execution_id 필드가 필수입니다.
+
+    Spring Boot는 response["execution_id"]를 읽어 클라이언트에 반환합니다.
+    이 키가 없으면 EXECUTION_FAILED 에러가 발생합니다.
+    """
+
     execution_id: str
     workflow_id: str
     status: str
     message: str
 
 
-# ── LLM ──
+# ── AI 워크플로우 생성 ──
+
+
+class GenerateWorkflowRequest(BaseModel):
+    """Spring Boot가 /api/v1/workflows/generate 로 보내는 요청 바디."""
+
+    prompt: str
+
+
+class GenerateWorkflowResponse(BaseModel):
+    """Spring Boot WorkflowCreateRequest 호환 응답.
+
+    Spring Boot는 이 응답을 ObjectMapper.convertValue()로
+    WorkflowCreateRequest에 매핑 후 MongoDB에 저장합니다.
+    name 필드가 없거나 비어 있으면 @NotBlank 검증으로 저장 실패합니다.
+    """
+
+    name: str
+    description: str | None = None
+    nodes: list[dict]
+    edges: list[dict]
+    trigger: dict
+
+
+# ── LLM (FastAPI 내부 전용) ──
 
 
 class LLMProcessRequest(BaseModel):
@@ -37,20 +76,16 @@ class LLMProcessResponse(BaseModel):
     tokens_used: int = 0
 
 
-class GenerateWorkflowRequest(BaseModel):
-    prompt: str
-    context: str | None = None
-
-
-class GenerateWorkflowResponse(BaseModel):
-    result: dict
-
-
 # ── 롤백 ──
 
 
 class RollbackRequest(BaseModel):
-    target_node_id: str | None = None
+    """Spring Boot가 /api/v1/executions/{executionId}/rollback 으로 보내는 요청.
+
+    node_id: 롤백 기준 노드 ID. Spring Boot에서 null을 보낼 수 있으므로 Optional.
+    """
+
+    node_id: str | None = None
 
 
 class RollbackResponse(BaseModel):

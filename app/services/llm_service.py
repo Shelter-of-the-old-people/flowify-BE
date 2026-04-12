@@ -61,26 +61,39 @@ class LLMService:
         return await self._invoke_with_retry(chain, {"text": text, "categories": cats})
 
     async def generate_workflow(self, prompt: str, context: str | None = None) -> dict:
-        """LLM 기반 워크플로우 자동 생성. JsonOutputParser 사용."""
+        """LLM 기반 워크플로우 자동 생성. JsonOutputParser 사용.
+
+        반환 구조는 Spring Boot WorkflowCreateRequest 호환 형식입니다:
+            { "name", "description", "nodes", "edges", "trigger" }
+        """
         system_prompt = (
             "당신은 워크플로우 설계 전문가입니다. "
-            "사용자의 요구사항을 분석하여 nodes와 edges 구조로 변환하세요.\n\n"
-            "반드시 다음 JSON 형식으로만 응답하세요:\n"
+            "사용자의 요구사항을 분석하여 자동화 워크플로우를 설계하세요.\n\n"
+            "반드시 다음 JSON 형식으로만 응답하세요 (다른 텍스트 없이 JSON만):\n"
             '{{\n'
+            '  "name": "워크플로우 이름 (필수, 비워두면 안 됨)",\n'
+            '  "description": "워크플로우 설명",\n'
             '  "nodes": [\n'
             '    {{\n'
-            '      "id": "node_1",\n'
-            '      "type": "input|llm|if_else|loop|output",\n'
-            '      "category": "communication|ai|logic|storage",\n'
+            '      "id": "node_abc12345",\n'
+            '      "category": "trigger | service | logic | output",\n'
+            '      "type": "gmail | slack | condition | http_request 등",\n'
+            '      "label": "노드 표시 이름",\n'
             '      "config": {{}},\n'
-            '      "data_type": null,\n'
-            '      "output_data_type": "FILE_LIST|EMAIL_LIST|TEXT|...",\n'
-            '      "role": "start|middle|end"\n'
+            '      "position": {{ "x": 0, "y": 0 }},\n'
+            '      "dataType": null,\n'
+            '      "outputDataType": null,\n'
+            '      "role": "start | end | null",\n'
+            '      "authWarning": false\n'
             '    }}\n'
             '  ],\n'
             '  "edges": [\n'
-            '    {{ "source": "node_1", "target": "node_2" }}\n'
-            '  ]\n'
+            '    {{ "id": "edge_abc12345", "source": "node_abc12345", "target": "node_def67890" }}\n'
+            '  ],\n'
+            '  "trigger": {{\n'
+            '    "type": "manual | schedule | webhook",\n'
+            '    "config": {{}}\n'
+            '  }}\n'
             '}}'
         )
 
