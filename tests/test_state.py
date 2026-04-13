@@ -62,3 +62,20 @@ class TestWorkflowStateManager:
     def test_pending_is_not_terminal(self):
         sm = WorkflowStateManager()
         assert sm.is_terminal() is False
+
+    def test_running_to_stopped(self):
+        sm = WorkflowStateManager()
+        sm.transition(WorkflowState.RUNNING)
+        sm.transition(WorkflowState.STOPPED)
+        assert sm.state == WorkflowState.STOPPED
+
+    def test_stopped_is_terminal(self):
+        sm = WorkflowStateManager()
+        sm.transition(WorkflowState.RUNNING)
+        sm.transition(WorkflowState.STOPPED)
+        assert sm.is_terminal() is True
+
+    def test_stopped_has_no_outgoing_transitions(self):
+        sm = WorkflowStateManager(initial_state=WorkflowState.STOPPED)
+        with pytest.raises(FlowifyException):
+            sm.transition(WorkflowState.PENDING)

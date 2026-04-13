@@ -1,6 +1,10 @@
+import logging
+
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 _client: AsyncIOMotorClient | None = None
 _db: AsyncIOMotorDatabase | None = None
@@ -8,9 +12,25 @@ _db: AsyncIOMotorDatabase | None = None
 
 async def connect_to_mongo() -> None:
     global _client, _db
-    _client = AsyncIOMotorClient(settings.MONGODB_URL)
+    _client = AsyncIOMotorClient(
+        settings.MONGODB_URL,
+        serverSelectionTimeoutMS=10000,
+    )
     _db = _client[settings.MONGODB_DB_NAME]
-    await _create_indexes(_db)
+
+    # 연결 확인
+    try:
+        await _client.admin.command("ping")
+        logger.info("MongoDB 연결 성공")
+    except Exception as e:
+        logger.error(f"MongoDB 연결 실패: {e}")
+        raise
+
+    # 인덱스 생성 (실패해도 앱은 시작)
+    try:
+        await _create_indexes(_db)
+    except Exception as e:
+        logger.warning(f"인덱스 생성 실패 (무시): {e}")
 
 
 async def close_mongo_connection() -> None:

@@ -8,10 +8,11 @@ class WorkflowState(str, Enum):
     RUNNING = "running"
     SUCCESS = "success"
     FAILED = "failed"
+    STOPPED = "stopped"
     ROLLBACK_AVAILABLE = "rollback_available"
 
 
-_TERMINAL_STATES = {WorkflowState.SUCCESS}
+_TERMINAL_STATES = {WorkflowState.SUCCESS, WorkflowState.STOPPED}
 
 
 class WorkflowStateManager:
@@ -19,10 +20,11 @@ class WorkflowStateManager:
 
     VALID_TRANSITIONS = {
         WorkflowState.PENDING: {WorkflowState.RUNNING},
-        WorkflowState.RUNNING: {WorkflowState.SUCCESS, WorkflowState.FAILED},
+        WorkflowState.RUNNING: {WorkflowState.SUCCESS, WorkflowState.FAILED, WorkflowState.STOPPED},
         WorkflowState.FAILED: {WorkflowState.ROLLBACK_AVAILABLE, WorkflowState.PENDING},
         WorkflowState.ROLLBACK_AVAILABLE: {WorkflowState.PENDING},
         WorkflowState.SUCCESS: set(),
+        WorkflowState.STOPPED: set(),
     }
 
     def __init__(self, initial_state: WorkflowState = WorkflowState.PENDING):

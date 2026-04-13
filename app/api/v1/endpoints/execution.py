@@ -3,6 +3,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.api.v1.deps import get_db
 from app.common.errors import ErrorCode, FlowifyException
+from app.core.engine.executor import request_cancellation
 from app.core.engine.state import WorkflowState
 from app.models.requests import RollbackRequest, RollbackResponse
 
@@ -130,3 +131,47 @@ async def rollback_execution(
         rollback_point=target_node_id,
         message=f"Rolled back to {target_node_id}. Ready for re-execution.",
     )
+
+
+# 이미 종료된 상태 (stop 요청 시 멱등 처리)
+_ALREADY_TERMINAL_STATES = {
+    WorkflowState.STOPPED.value,
+    WorkflowState.SUCCESS.value,
+    WorkflowState.FAILED.value,
+    WorkflowState.ROLLBACK_AVAILABLE.value,
+}
+
+
+@router.post("/{execution_id}/stop")
+async def stop_execution(
+    execution_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+) -> dict:
+    """실행 중인 워크플로우를 중지합니다.
+
+    Spring Boot 명세:
+        - Spring Boot가 state == "running" 확인 후 호출
+        - 실행 중지 후 state를 "stopped"로 변경
+        - 중복 요청은 멱등하게 2xx 반환
+        - 응답 바디는 Spring Boot에서 무시
+    """
+    doc = await _get_execution_doc(db, execution_id)
+    current_state = doc.get("state")
+
+    # 이미 종료 상태 → 멱등하게 200
+    if current_state in _ALREADY_TERMINAL_STATES:
+        return {"execution_id": execution_id, "status": current_state}
+
+    # in-memory 취소 시그널
+    request_cancellation(execution_id)
+
+    # MongoDB 직접 업데이트 (safety net — executor가 아직 체크 안 했을 경우 대비)
+    await db.workflow_executions.update_one(
+        {"_id": execution_id, "state": WorkflowState.RUNNING.value},
+        {"$set": {
+            "state": WorkflowState.STOPPED.value,
+            "errorMessage": "Execution stopped by user request",
+        }},
+    )
+
+    return {"execution_id": execution_id, "status": "stopped"}

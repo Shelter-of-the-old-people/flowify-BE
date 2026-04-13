@@ -203,3 +203,87 @@ class TestRollbackExecution:
         assert response.json()["error_code"] == "ROLLBACK_UNAVAILABLE"
 
         app.dependency_overrides.clear()
+
+
+class TestStopExecution:
+    def test_stop_running_execution(self, client):
+        """running 상태 실행 중지 → 200."""
+        doc = {"_id": "exec_abc123", "state": "running", "nodeLogs": []}
+
+        from app.api.v1.deps import get_db
+        mock_db = MagicMock()
+        mock_db.workflow_executions.find_one = AsyncMock(return_value=doc)
+        mock_db.workflow_executions.update_one = AsyncMock()
+        app.dependency_overrides[get_db] = lambda: mock_db
+
+        response = client.post(
+            "/api/v1/executions/exec_abc123/stop",
+            headers=AUTH_HEADERS,
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "stopped"
+        mock_db.workflow_executions.update_one.assert_called_once()
+
+        app.dependency_overrides.clear()
+
+    def test_stop_already_stopped_idempotent(self, client):
+        """이미 stopped → 멱등 200, update 미호출."""
+        doc = {"_id": "exec_abc123", "state": "stopped", "nodeLogs": []}
+
+        from app.api.v1.deps import get_db
+        mock_db = MagicMock()
+        mock_db.workflow_executions.find_one = AsyncMock(return_value=doc)
+        mock_db.workflow_executions.update_one = AsyncMock()
+        app.dependency_overrides[get_db] = lambda: mock_db
+
+        response = client.post(
+            "/api/v1/executions/exec_abc123/stop",
+            headers=AUTH_HEADERS,
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "stopped"
+        mock_db.workflow_executions.update_one.assert_not_called()
+
+        app.dependency_overrides.clear()
+
+    def test_stop_already_success_idempotent(self, client):
+        """이미 success → 멱등 200."""
+        doc = {"_id": "exec_abc123", "state": "success", "nodeLogs": []}
+
+        from app.api.v1.deps import get_db
+        mock_db = MagicMock()
+        mock_db.workflow_executions.find_one = AsyncMock(return_value=doc)
+        mock_db.workflow_executions.update_one = AsyncMock()
+        app.dependency_overrides[get_db] = lambda: mock_db
+
+        response = client.post(
+            "/api/v1/executions/exec_abc123/stop",
+            headers=AUTH_HEADERS,
+        )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "success"
+        mock_db.workflow_executions.update_one.assert_not_called()
+
+        app.dependency_overrides.clear()
+
+    def test_stop_not_found(self, client):
+        """실행 ID 없음 → 404."""
+        from app.api.v1.deps import get_db
+        mock_db = MagicMock()
+        mock_db.workflow_executions.find_one = AsyncMock(return_value=None)
+        app.dependency_overrides[get_db] = lambda: mock_db
+
+        response = client.post(
+            "/api/v1/executions/exec_nonexistent/stop",
+            headers=AUTH_HEADERS,
+        )
+
+        assert response.status_code == 404
+        assert response.json()["error_code"] == "EXECUTION_NOT_FOUND"
+
+        app.dependency_overrides.clear()

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, BackgroundTasks, Depends
 
 from app.api.v1.deps import get_db, get_user_id
-from app.core.engine.executor import WorkflowExecutor
+from app.core.engine.executor import WorkflowExecutor, register_cancellation_event
 from app.models.requests import (
     ExecutionResult,
     GenerateWorkflowRequest,
@@ -49,6 +49,7 @@ async def execute_workflow(
     응답의 execution_id를 Spring Boot가 클라이언트에 반환합니다.
     """
     execution_id = WorkflowExecutor.generate_execution_id()
+    register_cancellation_event(execution_id)
 
     background_tasks.add_task(
         _run_workflow,

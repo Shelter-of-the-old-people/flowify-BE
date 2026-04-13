@@ -198,6 +198,36 @@ HTTP 2xx 응답이면 성공으로 처리한다. 응답 바디는 무시한다 (
 
 ---
 
+### 2-4. 실행 중지 (신규)
+
+**Spring Boot가 FastAPI를 호출하는 시점:** 사용자가 `POST /api/workflows/{id}/executions/{execId}/stop` 요청 시.
+
+> Spring Boot는 호출 전에 실행 상태가 `"running"`인지 검증한다. `"running"`이 아니면 FastAPI 호출 없이 400 에러를 반환한다.
+
+```
+POST {FASTAPI_URL}/api/v1/executions/{executionId}/stop
+```
+
+**요청 헤더:**
+```
+X-Internal-Token: <INTERNAL_API_SECRET>
+X-User-ID: <userId>
+Content-Type: application/json
+```
+
+**요청 바디:** 없음 (빈 바디)
+
+**FastAPI 응답 (필수):**
+
+HTTP 2xx 응답이면 성공으로 처리한다. 응답 바디는 무시한다 (`bodyToMono(Void.class)`).
+
+**FastAPI 구현 요구사항:**
+- 실행 중인 워크플로우의 노드 처리를 즉시 중단해야 한다.
+- `workflow_executions` 컬렉션의 `state`를 `"stopped"` 또는 `"failed"`로 업데이트해야 한다.
+- 이미 중지된 실행에 대한 중복 요청은 멱등하게 처리해야 한다 (에러 없이 2xx 반환).
+
+---
+
 ## 3. FastAPI → Spring Boot 방향 콜백 (있을 경우)
 
 현재 Spring Boot 코드에 FastAPI로부터 비동기 콜백을 받는 엔드포인트는 **구현되어 있지 않다.**
@@ -222,6 +252,8 @@ FastAPI에서 HTTP 4xx/5xx 응답 시 Spring Boot가 반환하는 에러:
 | FastAPI 호출 실패 (4xx/5xx) | `FASTAPI_UNAVAILABLE` | 502 |
 | FastAPI 응답에 `execution_id` 없음 | `EXECUTION_FAILED` | 500 |
 | 실행할 수 없는 상태에서 롤백 요청 | `EXECUTION_FAILED` | 400 |
+| 실행 중이 아닌 상태에서 중지 요청 | `INVALID_REQUEST` | 400 |
+| FastAPI 중지 요청 실패 | `EXECUTION_FAILED` | 500 |
 
 ---
 
@@ -313,6 +345,26 @@ FastAPI에서 HTTP 4xx/5xx 응답 시 Spring Boot가 반환하는 에러:
   └─ MongoDB에 워크플로우 저장 후 WorkflowResponse 반환
 ```
 
+```
+[사용자]
+  │
+  ▼ POST /api/workflows/{id}/executions/{execId}/stop
+[Spring Boot]
+  ├─ 실행 상태 확인 (state == "running" 검증)
+  └─ FastApiClient.stopExecution() 호출
+       │
+       ▼ POST /api/v1/executions/{id}/stop
+       │   Header: X-Internal-Token, X-User-ID
+[FastAPI]
+       │
+       ▼ HTTP 2xx (바디 무시)
+[Spring Boot]
+  └─ 성공 응답 반환
+       │
+       ▼ ApiResponse<Void> { "success": true }
+[사용자]
+```
+
 ---
 
 ## 7. Spring Boot 실행 이력 저장 구조
@@ -384,3 +436,5 @@ INTERNAL_API_SECRET: <공유된 비밀값>
 |------|-----------|
 | 2026-04-13 | 최초 작성. execute, generate, rollback 3개 엔드포인트 전체 명세 완성. |
 | 2026-04-13 | `NodeDefinition.label`, `EdgeDefinition.id` 필드 추가 반영. |
+| 2026-04-13 | 실행 중지 API (`POST /api/v1/executions/{id}/stop`) 추가. |
+| 2026-04-13 | 워크플로우 목록 조회 API 페이지네이션 제거 — 전체 리스트 반환으로 변경 (프론트 무한 스크롤 대응). FastAPI에는 영향 없음. |

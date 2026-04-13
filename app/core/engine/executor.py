@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import time
 import traceback
@@ -19,6 +20,30 @@ from app.models.execution import (
     WorkflowExecution,
 )
 from app.models.workflow import EdgeDefinition, NodeDefinition
+
+# ── 취소 레지스트리 ──
+# execution_id → asyncio.Event. stop 엔드포인트가 event.set() 호출,
+# executor가 노드 간 루프에서 is_set() 체크.
+
+_cancellation_events: dict[str, asyncio.Event] = {}
+
+
+def register_cancellation_event(execution_id: str) -> asyncio.Event:
+    event = asyncio.Event()
+    _cancellation_events[execution_id] = event
+    return event
+
+
+def request_cancellation(execution_id: str) -> bool:
+    event = _cancellation_events.get(execution_id)
+    if event:
+        event.set()
+        return True
+    return False
+
+
+def cleanup_cancellation_event(execution_id: str) -> None:
+    _cancellation_events.pop(execution_id, None)
 
 
 class WorkflowExecutor:
@@ -76,65 +101,90 @@ class WorkflowExecutor:
         data: dict = {"credentials": service_tokens}
         skipped_nodes: set[str] = set()
 
-        for node_id in execution_order:
-            if node_id in skipped_nodes:
-                execution.nodeLogs.append(
-                    NodeExecutionLog(
-                        nodeId=node_id,
-                        status="skipped",
-                        startedAt=datetime.utcnow(),
-                        finishedAt=datetime.utcnow(),
-                    )
-                )
-                continue
-
-            node_def = node_map[node_id]
-            node_log = await self._execute_node(
-                node_def, data, snapshot_manager
-            )
-            execution.nodeLogs.append(node_log)
-
-            if node_log.status == "failed":
-                # 실패 시: 이후 모든 노드 skip
-                logged_ids = {log.nodeId for log in execution.nodeLogs}
-                for rem_id in execution_order:
-                    if rem_id not in logged_ids:
-                        execution.nodeLogs.append(
-                            NodeExecutionLog(
-                                nodeId=rem_id,
-                                status="skipped",
-                                startedAt=datetime.utcnow(),
-                                finishedAt=datetime.utcnow(),
+        try:
+            for node_id in execution_order:
+                # ── 취소 체크 ──
+                cancel_event = _cancellation_events.get(execution_id)
+                if cancel_event and cancel_event.is_set():
+                    logged_ids = {log.nodeId for log in execution.nodeLogs}
+                    for rem_id in execution_order:
+                        if rem_id not in logged_ids:
+                            execution.nodeLogs.append(
+                                NodeExecutionLog(
+                                    nodeId=rem_id,
+                                    status="skipped",
+                                    startedAt=datetime.utcnow(),
+                                    finishedAt=datetime.utcnow(),
+                                )
                             )
+                    state_manager.transition(WorkflowState.STOPPED)
+                    execution.state = WorkflowState.STOPPED
+                    execution.errorMessage = "Execution stopped by user request"
+                    execution.finishedAt = datetime.utcnow()
+                    await self._save_execution(execution_id, execution)
+                    return execution
+
+                if node_id in skipped_nodes:
+                    execution.nodeLogs.append(
+                        NodeExecutionLog(
+                            nodeId=node_id,
+                            status="skipped",
+                            startedAt=datetime.utcnow(),
+                            finishedAt=datetime.utcnow(),
                         )
+                    )
+                    continue
 
-                state_manager.transition(WorkflowState.FAILED)
-                state_manager.transition(WorkflowState.ROLLBACK_AVAILABLE)
-                execution.state = WorkflowState.ROLLBACK_AVAILABLE
-                execution.errorMessage = node_log.error.message if node_log.error else "노드 실행 실패"
-                execution.finishedAt = datetime.utcnow()
-                await self._save_execution(execution_id, execution)
-                return execution
+                node_def = node_map[node_id]
+                node_log = await self._execute_node(
+                    node_def, data, snapshot_manager
+                )
+                execution.nodeLogs.append(node_log)
 
-            # 성공 시 output을 다음 데이터로 전파
-            data = node_log.outputData
+                if node_log.status == "failed":
+                    # 실패 시: 이후 모든 노드 skip
+                    logged_ids = {log.nodeId for log in execution.nodeLogs}
+                    for rem_id in execution_order:
+                        if rem_id not in logged_ids:
+                            execution.nodeLogs.append(
+                                NodeExecutionLog(
+                                    nodeId=rem_id,
+                                    status="skipped",
+                                    startedAt=datetime.utcnow(),
+                                    finishedAt=datetime.utcnow(),
+                                )
+                            )
 
-            # IfElse 분기 처리: branch 값에 따라 반대쪽 서브트리 skip
-            if node_def.type == "if_else" and "branch" in data:
-                branch_value = data["branch"]  # "true" or "false"
-                skip_value = "false" if branch_value == "true" else "true"
-                if node_id in branch_map:
-                    skip_target = branch_map[node_id].get(skip_value)
-                    if skip_target:
-                        descendants = self._get_descendants(skip_target, adjacency)
-                        skipped_nodes.update(descendants)
-                        skipped_nodes.add(skip_target)
+                    state_manager.transition(WorkflowState.FAILED)
+                    state_manager.transition(WorkflowState.ROLLBACK_AVAILABLE)
+                    execution.state = WorkflowState.ROLLBACK_AVAILABLE
+                    execution.errorMessage = node_log.error.message if node_log.error else "노드 실행 실패"
+                    execution.finishedAt = datetime.utcnow()
+                    await self._save_execution(execution_id, execution)
+                    return execution
 
-        state_manager.transition(WorkflowState.SUCCESS)
-        execution.state = WorkflowState.SUCCESS
-        execution.finishedAt = datetime.utcnow()
-        await self._save_execution(execution_id, execution)
-        return execution
+                # 성공 시 output을 다음 데이터로 전파
+                data = node_log.outputData
+
+                # IfElse 분기 처리: branch 값에 따라 반대쪽 서브트리 skip
+                if node_def.type == "if_else" and "branch" in data:
+                    branch_value = data["branch"]  # "true" or "false"
+                    skip_value = "false" if branch_value == "true" else "true"
+                    if node_id in branch_map:
+                        skip_target = branch_map[node_id].get(skip_value)
+                        if skip_target:
+                            descendants = self._get_descendants(skip_target, adjacency)
+                            skipped_nodes.update(descendants)
+                            skipped_nodes.add(skip_target)
+
+            state_manager.transition(WorkflowState.SUCCESS)
+            execution.state = WorkflowState.SUCCESS
+            execution.finishedAt = datetime.utcnow()
+            await self._save_execution(execution_id, execution)
+            return execution
+
+        finally:
+            cleanup_cancellation_event(execution_id)
 
     async def _execute_node(
         self,

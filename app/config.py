@@ -27,7 +27,11 @@ class Settings(BaseSettings):
 
     INTERNAL_API_SECRET: str = ""
 
-    model_config = {"env_file": str(BASE_DIR / ".env"), "env_file_encoding": "utf-8"}
+    model_config = {
+        "env_file": str(BASE_DIR / ".env"),
+        "env_file_encoding": "utf-8",
+        "env_file_ignore_missing": True,
+    }
 
 
 settings = Settings()
