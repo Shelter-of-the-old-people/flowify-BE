@@ -1,3 +1,5 @@
+import time
+
 from app.core.nodes.base import NodeStrategy
 
 MAX_LOOP_ITERATIONS = 1000
@@ -26,13 +28,19 @@ class LoopNodeStrategy(NodeStrategy):
     async def execute(self, input_data: dict) -> dict:
         items = input_data.get(self.config.get("items_field", "items"), [])
         max_iterations = min(self.config.get("max_iterations", MAX_LOOP_ITERATIONS), MAX_LOOP_ITERATIONS)
+        transform_field = self.config.get("transform_field")
         results = []
 
+        start_time = time.monotonic()
         for i, item in enumerate(items):
             if i >= max_iterations:
                 break
-            # TODO: 내부 노드 체인 실행
-            results.append(item)
+            if time.monotonic() - start_time > DEFAULT_TIMEOUT_SECONDS:
+                break
+            if transform_field and isinstance(item, dict):
+                results.append(item.get(transform_field, item))
+            else:
+                results.append(item)
 
         return {**input_data, "loop_results": results, "iterations": len(results)}
 

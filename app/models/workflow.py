@@ -29,11 +29,13 @@ class EdgeDefinition(BaseModel):
     """엣지 정의 모델.
 
     Spring Boot는 id 필드를 포함해 전송합니다.
+    label은 IfElse 분기 방향 ("true" | "false") 에 사용됩니다.
     """
 
     id: str | None = None
     source: str
     target: str
+    label: str | None = None
 
 
 class TriggerConfig(BaseModel):

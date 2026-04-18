@@ -33,7 +33,9 @@ class BaseIntegrationService:
         timeout: float = 30.0,
     ) -> dict:
         """인증 헤더 포함 HTTP 요청 + 재시도 + 에러 래핑."""
-        req_headers = {"Authorization": f"Bearer {token}"}
+        req_headers = {}
+        if token:
+            req_headers["Authorization"] = f"Bearer {token}"
         if headers:
             req_headers.update(headers)
 

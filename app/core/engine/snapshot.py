@@ -42,3 +42,25 @@ class SnapshotManager:
         if self._snapshots:
             return self._snapshots[-1]["node_id"]
         return None
+
+    @staticmethod
+    async def get_snapshot_from_db(db, execution_id: str, node_id: str) -> dict | None:
+        """MongoDB에서 특정 노드의 스냅샷 데이터를 조회합니다."""
+        doc = await db.workflow_executions.find_one({"_id": execution_id})
+        if not doc:
+            return None
+        for log in doc.get("nodeLogs", []):
+            if log.get("nodeId") == node_id and log.get("snapshot"):
+                return log["snapshot"].get("stateData")
+        return None
+
+    @staticmethod
+    async def get_last_success_snapshot(db, execution_id: str) -> tuple[str, dict] | None:
+        """MongoDB에서 마지막 성공 노드의 (node_id, snapshot_data)를 반환합니다."""
+        doc = await db.workflow_executions.find_one({"_id": execution_id})
+        if not doc:
+            return None
+        for log in reversed(doc.get("nodeLogs", [])):
+            if log.get("status") == "success" and log.get("snapshot"):
+                return log.get("nodeId"), log["snapshot"].get("stateData")
+        return None

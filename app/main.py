@@ -8,12 +8,17 @@ from app.api.v1.router import api_router
 from app.common.errors import FlowifyException, flowify_exception_handler, generic_exception_handler
 from app.config import settings
 from app.db.mongodb import close_mongo_connection, connect_to_mongo
+from app.services.scheduler_service import SchedulerService
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_to_mongo()
+    scheduler = SchedulerService()
+    scheduler.start()
+    app.state.scheduler = scheduler
     yield
+    scheduler.shutdown()
     await close_mongo_connection()
 
 

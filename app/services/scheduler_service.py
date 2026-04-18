@@ -25,3 +25,27 @@ class SchedulerService:
 
     def remove_job(self, job_id: str) -> None:
         self._scheduler.remove_job(job_id)
+
+    def get_jobs(self) -> list[dict]:
+        """등록된 모든 스케줄 작업 목록을 반환합니다."""
+        jobs = []
+        for job in self._scheduler.get_jobs():
+            jobs.append({
+                "id": job.id,
+                "name": job.name,
+                "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
+                "trigger": str(job.trigger),
+            })
+        return jobs
+
+    def get_job(self, job_id: str) -> dict | None:
+        """특정 스케줄 작업 정보를 반환합니다."""
+        job = self._scheduler.get_job(job_id)
+        if not job:
+            return None
+        return {
+            "id": job.id,
+            "name": job.name,
+            "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
+            "trigger": str(job.trigger),
+        }

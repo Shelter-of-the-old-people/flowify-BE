@@ -28,10 +28,35 @@ dev = [
 
 [tool.ruff]
 target-version = "py311"
-line-length = 120
+line-length = 100
+exclude = [".venv", "__pycache__", ".pytest_cache"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W"]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes (미사용 import, 변수 등)
+    "I",   # isort (import 순서)
+    "N",   # pep8-naming (네이밍 규칙)
+    "UP",  # pyupgrade (최신 Python 문법)
+    "B",   # flake8-bugbear (잠재적 버그)
+    "SIM", # flake8-simplify (코드 단순화)
+]
+ignore = [
+    "E501",  # line-length는 formatter가 처리
+    "N818",  # Exception 클래스명 규칙 완화 (FlowifyException 유지)
+    "B008",  # FastAPI Depends() 사용 허용
+    "SIM108", # 삼항 연산자 강제 비활성화
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+force-sort-within-sections = true
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

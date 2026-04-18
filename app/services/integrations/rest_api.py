@@ -18,23 +18,7 @@ class RestAPIService(BaseIntegrationService):
         token: str = "",
         timeout: float = 30.0,
     ) -> dict:
-        if token:
-            return await self._request(
-                method, url, token,
-                json=body, params=params, headers=headers, timeout=timeout,
-            )
-
-        # 토큰 없는 공개 API 호출
-        import httpx
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.request(
-                method=method.upper(),
-                url=url,
-                headers=headers,
-                params=params,
-                json=body,
-            )
-            resp.raise_for_status()
-            if resp.headers.get("content-type", "").startswith("application/json"):
-                return resp.json()
-            return {"status_code": resp.status_code, "text": resp.text}
+        return await self._request(
+            method, url, token,
+            json=body, params=params, headers=headers, timeout=timeout,
+        )

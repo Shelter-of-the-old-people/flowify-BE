@@ -119,10 +119,14 @@ async def rollback_execution(
             detail="롤백할 수 있는 성공 노드가 없습니다.",
         )
 
-    # 상태를 PENDING으로 전환
+    # 상태를 PENDING으로 전환하고 에러 정보 초기화
     await db.workflow_executions.update_one(
         {"_id": execution_id},
-        {"$set": {"state": WorkflowState.PENDING.value}},
+        {"$set": {
+            "state": WorkflowState.PENDING.value,
+            "errorMessage": None,
+            "finishedAt": None,
+        }},
     )
 
     return RollbackResponse(

@@ -1,3 +1,4 @@
+from app.common.errors import ErrorCode, FlowifyException
 from app.core.nodes.base import NodeStrategy
 from app.core.nodes.input_node import InputNodeStrategy
 from app.core.nodes.llm_node import LLMNodeStrategy
@@ -20,7 +21,10 @@ class NodeFactory:
     def create(node_type: str, config: dict | None = None) -> NodeStrategy:
         node_class = _NODE_REGISTRY.get(node_type)
         if node_class is None:
-            raise ValueError(f"Unknown node type: {node_type}")
+            raise FlowifyException(
+                ErrorCode.INVALID_REQUEST,
+                detail=f"알 수 없는 노드 타입입니다: {node_type}",
+            )
         return node_class(config)
 
     @staticmethod

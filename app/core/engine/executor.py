@@ -91,7 +91,7 @@ class WorkflowExecutor:
         # edges -> 인접 리스트 (분기 처리용)
         adjacency = self._build_adjacency(edges)
         # IfElse 분기 edge 매핑: source -> {label: target}
-        branch_map = self._build_branch_map(edges)
+        branch_map = self._build_branch_map(nodes, edges)
 
         state_manager.transition(WorkflowState.RUNNING)
         execution.state = WorkflowState.RUNNING
@@ -264,11 +264,19 @@ class WorkflowExecutor:
         # _id를 executionId로 명시적으로 설정
         doc["_id"] = execution_id
 
-        await self._db.workflow_executions.update_one(
-            {"_id": execution_id},
-            {"$set": doc},
-            upsert=True,
-        )
+        # STOPPED 상태를 SUCCESS로 덮어쓰지 않도록 조건부 upsert
+        if doc.get("state") == WorkflowState.SUCCESS.value:
+            await self._db.workflow_executions.update_one(
+                {"_id": execution_id, "state": {"$ne": WorkflowState.STOPPED.value}},
+                {"$set": doc},
+                upsert=True,
+            )
+        else:
+            await self._db.workflow_executions.update_one(
+                {"_id": execution_id},
+                {"$set": doc},
+                upsert=True,
+            )
 
     @staticmethod
     def _strip_credentials(data: dict) -> dict:
@@ -318,20 +326,32 @@ class WorkflowExecutor:
         return adj
 
     @staticmethod
-    def _build_branch_map(edges: list[EdgeDefinition]) -> dict[str, dict[str, str]]:
+    def _build_branch_map(
+        nodes: list[NodeDefinition], edges: list[EdgeDefinition]
+    ) -> dict[str, dict[str, str]]:
         """IfElse 분기 매핑 생성.
 
-        EdgeDefinition에 label이 없으면, source에서 나가는 edge가 2개인 경우
-        첫 번째를 true, 두 번째를 false로 간주합니다.
+        label이 있는 edge는 label 기반으로, 없으면 if_else 노드에 한해
+        첫 번째 edge를 true, 두 번째를 false로 간주합니다.
         """
+        if_else_ids = {n.id for n in nodes if n.type == "if_else"}
+
+        # label이 있는 edge 먼저 처리
+        branch_map: dict[str, dict[str, str]] = {}
+        for edge in edges:
+            if edge.source in if_else_ids and edge.label in ("true", "false"):
+                branch_map.setdefault(edge.source, {})[edge.label] = edge.target
+
+        # label 없는 경우: if_else 노드의 outgoing edge 순서로 true/false 결정
         outgoing: dict[str, list[str]] = defaultdict(list)
         for edge in edges:
-            outgoing[edge.source].append(edge.target)
+            if edge.source in if_else_ids and not (edge.label in ("true", "false")):
+                outgoing[edge.source].append(edge.target)
 
-        branch_map: dict[str, dict[str, str]] = {}
         for source, targets in outgoing.items():
-            if len(targets) == 2:
+            if source not in branch_map and len(targets) == 2:
                 branch_map[source] = {"true": targets[0], "false": targets[1]}
+
         return branch_map
 
     @staticmethod
