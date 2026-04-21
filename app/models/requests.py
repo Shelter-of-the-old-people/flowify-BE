@@ -26,16 +26,13 @@ class WorkflowExecuteRequest(BaseModel):
 
 
 class ExecutionResult(BaseModel):
-    """워크플로우 실행 시작 응답. execution_id 필드가 필수입니다.
+    """워크플로우 실행 시작 응답.
 
-    Spring Boot는 response["execution_id"]를 읽어 클라이언트에 반환합니다.
+    Spring Boot는 response["execution_id"]만 읽습니다.
     이 키가 없으면 EXECUTION_FAILED 에러가 발생합니다.
     """
 
     execution_id: str
-    workflow_id: str
-    status: str
-    message: str
 
 
 # ── AI 워크플로우 생성 ──

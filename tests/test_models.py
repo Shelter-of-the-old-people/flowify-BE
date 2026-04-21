@@ -177,8 +177,5 @@ class TestExecutionResult:
     def test_valid(self):
         result = ExecutionResult(
             execution_id="exec_1",
-            workflow_id="wf_1",
-            status="running",
-            message="Started",
         )
-        assert result.status == "running"
+        assert result.execution_id == "exec_1"

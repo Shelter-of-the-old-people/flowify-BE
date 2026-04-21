@@ -5,6 +5,7 @@ import traceback
 import uuid
 from collections import defaultdict, deque
 from datetime import datetime
+from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -49,17 +50,10 @@ def cleanup_cancellation_event(execution_id: str) -> None:
 class WorkflowExecutor:
     """워크플로우 실행 엔진.
 
-    edges 기반 토폴로지 정렬, 스냅샷, MongoDB 로깅, IfElse 분기 처리를 지원합니다.
-
-    MongoDB `workflow_executions` 컬렉션 스키마:
-        _id          : executionId (문자열 — Spring Boot 명세 일치)
-        workflowId   : str
-        userId       : str
-        state        : "running" | "completed" | "failed" | "rollback_available"
-        nodeLogs     : list[NodeExecutionLog]
-        errorMessage : str | null
-        startedAt    : ISO8601
-        finishedAt   : ISO8601 | null
+    v2 runtime contract:
+    - runtime_type 기반 전략 선택 (fallback: role + type 추론)
+    - canonical payload 기반 노드 간 데이터 전달
+    - service_tokens를 별도 파라미터로 전략에 전달
     """
 
     def __init__(self, db: AsyncIOMotorDatabase):
@@ -97,8 +91,8 @@ class WorkflowExecutor:
         execution.state = WorkflowState.RUNNING
         await self._save_execution(execution_id, execution)
 
-        # service_tokens를 실행 데이터에 포함 (노드에서 credentials로 접근 가능)
-        data: dict = {"credentials": service_tokens}
+        # v2: 노드별 출력을 canonical payload로 관리
+        node_outputs: dict[str, dict[str, Any]] = {}
         skipped_nodes: set[str] = set()
 
         try:
@@ -136,8 +130,15 @@ class WorkflowExecutor:
                     continue
 
                 node_def = node_map[node_id]
+
+                # v2: predecessor의 canonical payload를 input_data로 전달
+                prev_node_ids = self._get_predecessors(node_id, edges)
+                input_data: dict[str, Any] | None = None
+                if prev_node_ids:
+                    input_data = node_outputs.get(prev_node_ids[0])
+
                 node_log = await self._execute_node(
-                    node_def, data, snapshot_manager
+                    node_def, input_data, service_tokens, snapshot_manager
                 )
                 execution.nodeLogs.append(node_log)
 
@@ -163,12 +164,14 @@ class WorkflowExecutor:
                     await self._save_execution(execution_id, execution)
                     return execution
 
-                # 성공 시 output을 다음 데이터로 전파
-                data = node_log.outputData
+                # v2: 성공 시 canonical payload를 node_outputs에 저장
+                node_outputs[node_id] = node_log.outputData or {}
 
                 # IfElse 분기 처리: branch 값에 따라 반대쪽 서브트리 skip
-                if node_def.type == "if_else" and "branch" in data:
-                    branch_value = data["branch"]  # "true" or "false"
+                runtime_type = getattr(node_def, "runtime_type", None) or node_def.type
+                output_data = node_outputs[node_id]
+                if runtime_type == "if_else" and isinstance(output_data, dict) and "branch" in output_data:
+                    branch_value = output_data["branch"]  # "true" or "false"
                     skip_value = "false" if branch_value == "true" else "true"
                     if node_id in branch_map:
                         skip_target = branch_map[node_id].get(skip_value)
@@ -189,26 +192,34 @@ class WorkflowExecutor:
     async def _execute_node(
         self,
         node_def: NodeDefinition,
-        input_data: dict,
+        input_data: dict[str, Any] | None,
+        service_tokens: dict[str, str],
         snapshot_manager: SnapshotManager,
     ) -> NodeExecutionLog:
         """단일 노드 실행. 스냅샷 저장, 타이밍 측정, 에러 캐치."""
         started_at = datetime.utcnow()
-        start_time = time.monotonic()
 
         # 실행 전 스냅샷 저장
-        snapshot_data = self._strip_credentials(input_data)
-        snapshot_manager.save(node_def.id, input_data)
+        snapshot_data = self._sanitize_for_log(input_data)
+        snapshot_manager.save(node_def.id, input_data or {})
+
+        # v2: runtime_type 기반 전략 생성
+        node = self._factory.create_from_node_def(node_def)
+        # node dict로 변환 (runtime 필드 포함, snake_case 유지)
+        node_dict = node_def.model_dump(by_alias=False)
 
         try:
-            node = self._factory.create(node_def.type, node_def.config)
-            output_data = await node.execute(input_data)
+            output_data = await node.execute(
+                node=node_dict,
+                input_data=input_data,
+                service_tokens=service_tokens,
+            )
 
             return NodeExecutionLog(
                 nodeId=node_def.id,
                 status="success",
-                inputData=self._strip_credentials(input_data),
-                outputData=self._strip_credentials(output_data),
+                inputData=self._sanitize_for_log(input_data),
+                outputData=self._sanitize_for_log(output_data),
                 snapshot=NodeSnapshot(
                     capturedAt=started_at,
                     stateData=snapshot_data,
@@ -221,7 +232,7 @@ class WorkflowExecutor:
             return NodeExecutionLog(
                 nodeId=node_def.id,
                 status="failed",
-                inputData=self._strip_credentials(input_data),
+                inputData=self._sanitize_for_log(input_data),
                 snapshot=NodeSnapshot(
                     capturedAt=started_at,
                     stateData=snapshot_data,
@@ -239,7 +250,7 @@ class WorkflowExecutor:
             return NodeExecutionLog(
                 nodeId=node_def.id,
                 status="failed",
-                inputData=self._strip_credentials(input_data),
+                inputData=self._sanitize_for_log(input_data),
                 snapshot=NodeSnapshot(
                     capturedAt=started_at,
                     stateData=snapshot_data,
@@ -254,14 +265,9 @@ class WorkflowExecutor:
             )
 
     async def _save_execution(self, execution_id: str, execution: WorkflowExecution) -> None:
-        """실행 상태를 MongoDB에 upsert합니다.
-
-        _id를 executionId로 설정합니다 (Spring Boot 명세 기준).
-        """
+        """실행 상태를 MongoDB에 upsert합니다."""
         doc = execution.model_dump(mode="json")
-        # state enum -> 문자열 변환
         doc["state"] = execution.state.value if hasattr(execution.state, "value") else execution.state
-        # _id를 executionId로 명시적으로 설정
         doc["_id"] = execution_id
 
         # STOPPED 상태를 SUCCESS로 덮어쓰지 않도록 조건부 upsert
@@ -279,13 +285,18 @@ class WorkflowExecutor:
             )
 
     @staticmethod
-    def _strip_credentials(data: dict) -> dict:
-        """credentials 필드를 제거한 복사본을 반환합니다."""
+    def _sanitize_for_log(data: dict | None) -> dict:
+        """로깅/스냅샷용: credentials 등 민감 정보 제거."""
         if not data:
             return {}
         cleaned = copy.deepcopy(data)
         cleaned.pop("credentials", None)
         return cleaned
+
+    @staticmethod
+    def _get_predecessors(node_id: str, edges: list[EdgeDefinition]) -> list[str]:
+        """주어진 노드의 선행 노드 ID 목록을 반환."""
+        return [e.source for e in edges if e.target == node_id]
 
     @staticmethod
     def _topological_sort(
@@ -334,15 +345,18 @@ class WorkflowExecutor:
         label이 있는 edge는 label 기반으로, 없으면 if_else 노드에 한해
         첫 번째 edge를 true, 두 번째를 false로 간주합니다.
         """
-        if_else_ids = {n.id for n in nodes if n.type == "if_else"}
+        if_else_ids = {
+            n.id for n in nodes
+            if (getattr(n, "runtime_type", None) or n.type) == "if_else"
+        }
 
-        # label이 있는 edge 먼저 처리
+        # label이 ��는 edge 먼저 처리
         branch_map: dict[str, dict[str, str]] = {}
         for edge in edges:
             if edge.source in if_else_ids and edge.label in ("true", "false"):
                 branch_map.setdefault(edge.source, {})[edge.label] = edge.target
 
-        # label 없는 경우: if_else 노드의 outgoing edge 순서로 true/false 결정
+        # label 없는 경우: if_else 노드의 outgoing edge 순서로 true/false ��정
         outgoing: dict[str, list[str]] = defaultdict(list)
         for edge in edges:
             if edge.source in if_else_ids and not (edge.label in ("true", "false")):

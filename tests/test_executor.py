@@ -59,31 +59,37 @@ class TestTopologicalSort:
             WorkflowExecutor._topological_sort(nodes, edges)
 
 
-class TestStripCredentials:
+class TestSanitizeForLog:
     def test_removes_credentials(self):
         data = {"key": "value", "credentials": {"google": "token"}}
-        result = WorkflowExecutor._strip_credentials(data)
+        result = WorkflowExecutor._sanitize_for_log(data)
         assert "credentials" not in result
         assert result["key"] == "value"
 
     def test_empty_data(self):
-        assert WorkflowExecutor._strip_credentials({}) == {}
+        assert WorkflowExecutor._sanitize_for_log({}) == {}
+
+    def test_none_data(self):
+        assert WorkflowExecutor._sanitize_for_log(None) == {}
 
     def test_no_credentials_key(self):
         data = {"key": "value"}
-        result = WorkflowExecutor._strip_credentials(data)
+        result = WorkflowExecutor._sanitize_for_log(data)
         assert result == {"key": "value"}
 
 
 def _mock_factory(side_effect=None, return_value=None):
-    """테스트용 mock factory를 생성합니다."""
+    """테스트용 mock factory를 생성합니다.
+
+    v2: create_from_node_def를 mock하고, execute는 (node, input_data, service_tokens) 시그니처.
+    """
     factory = MagicMock()
     mock_node = AsyncMock()
     if side_effect:
         mock_node.execute = AsyncMock(side_effect=side_effect)
     elif return_value is not None:
         mock_node.execute = AsyncMock(return_value=return_value)
-    factory.create.return_value = mock_node
+    factory.create_from_node_def.return_value = mock_node
     return factory
 
 
@@ -92,7 +98,9 @@ class TestExecuteWorkflow:
     async def test_linear_success(self, mock_db):
         """input -> llm -> output 선형 워크플로우 성공 테스트."""
         executor = WorkflowExecutor(mock_db)
-        executor._factory = _mock_factory(side_effect=lambda d: {**d, "processed": True})
+        executor._factory = _mock_factory(
+            side_effect=lambda node, input_data, service_tokens: {"type": "TEXT", "content": "ok"}
+        )
 
         nodes = _make_nodes("input", "llm", "output")
         edges = _make_edges(("node_1", "node_2"), ("node_2", "node_3"))
@@ -117,12 +125,12 @@ class TestExecuteWorkflow:
 
         call_count = 0
 
-        async def side_effect(data):
+        async def side_effect(node, input_data, service_tokens):
             nonlocal call_count
             call_count += 1
             if call_count == 2:  # 두 번째 노드(llm)에서 실패
                 raise RuntimeError("LLM failed")
-            return {**data, "ok": True}
+            return {"type": "TEXT", "content": "ok"}
 
         executor._factory = _mock_factory(side_effect=side_effect)
 
@@ -148,7 +156,7 @@ class TestExecuteWorkflow:
         """로그에 credentials가 포함되지 않는지 확인."""
         executor = WorkflowExecutor(mock_db)
         executor._factory = _mock_factory(
-            return_value={"result": "ok", "credentials": {"secret": "should_be_stripped"}}
+            return_value={"type": "TEXT", "content": "ok", "credentials": {"secret": "should_be_stripped"}}
         )
 
         nodes = _make_nodes("input")
@@ -164,8 +172,7 @@ class TestExecuteWorkflow:
         )
 
         log = result.nodeLogs[0]
-        assert "credentials" not in log.inputData
-        assert "credentials" not in log.outputData
+        assert "credentials" not in (log.outputData or {})
 
 
 class TestGenerateExecutionId:

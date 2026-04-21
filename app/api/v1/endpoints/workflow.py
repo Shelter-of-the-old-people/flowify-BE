@@ -60,12 +60,7 @@ async def execute_workflow(
         user_id,
     )
 
-    return ExecutionResult(
-        execution_id=execution_id,
-        workflow_id=workflow_id,
-        status="running",
-        message="Workflow execution started asynchronously.",
-    )
+    return ExecutionResult(execution_id=execution_id)
 
 
 @router.post("/generate")

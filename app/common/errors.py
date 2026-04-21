@@ -25,6 +25,10 @@ class ErrorCode(Enum):
     CRAWL_FAILED = (502, "웹 수집에 실패했습니다")
     DATA_CONVERSION_FAILED = (422, "데이터 변환에 실패했습니다")
     ROLLBACK_UNAVAILABLE = (400, "롤백할 수 없는 상태입니다")
+    UNSUPPORTED_RUNTIME_SOURCE = (400, "미지원 런타임 소스입니다")
+    UNSUPPORTED_RUNTIME_SINK = (400, "미지원 런타임 싱크입니다")
+    TOKEN_EXPIRED = (401, "OAuth 토큰이 만료되었습니다")
+    EXTERNAL_SERVICE_ERROR = (502, "외부 서비스 호출에 실패했습니다")
 
     @property
     def http_status(self) -> int:

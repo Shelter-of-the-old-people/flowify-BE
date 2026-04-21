@@ -14,8 +14,32 @@ _NODE_REGISTRY: dict[str, type[NodeStrategy]] = {
 }
 
 
+def infer_runtime_type(node_def) -> str:
+    """runtime_type이 없을 때 role/type으로 추론 (transition 기간 fallback).
+
+    가이드 섹션 4.2 참조.
+    """
+    role = getattr(node_def, "role", None)
+    if role == "start":
+        return "input"
+    if role == "end":
+        return "output"
+
+    node_type = (getattr(node_def, "type", "") or "").upper()
+    if node_type == "LOOP":
+        return "loop"
+    if node_type in ("CONDITION_BRANCH", "IF_ELSE"):
+        return "if_else"
+
+    return "llm"
+
+
 class NodeFactory:
-    """Factory 패턴 - 노드 타입 문자열로부터 Strategy 인스턴스 생성"""
+    """Factory 패턴 - runtime_type 문자열로부터 Strategy 인스턴스 생성.
+
+    v2: runtime_type을 PRIMARY 키로 사용하고,
+    없으면 role + type에서 추론 (transition fallback).
+    """
 
     @staticmethod
     def create(node_type: str, config: dict | None = None) -> NodeStrategy:
@@ -26,6 +50,21 @@ class NodeFactory:
                 detail=f"알 수 없는 노드 타입입니다: {node_type}",
             )
         return node_class(config)
+
+    @staticmethod
+    def create_from_node_def(node_def) -> NodeStrategy:
+        """NodeDefinition으로부터 runtime_type 기반 전략 생성."""
+        runtime_type = getattr(node_def, "runtime_type", None)
+        if not runtime_type:
+            runtime_type = infer_runtime_type(node_def)
+
+        node_class = _NODE_REGISTRY.get(runtime_type)
+        if node_class is None:
+            raise FlowifyException(
+                ErrorCode.INVALID_REQUEST,
+                detail=f"알 수 없는 런타임 타입입니다: {runtime_type}",
+            )
+        return node_class(getattr(node_def, "config", None))
 
     @staticmethod
     def register(node_type: str, node_class: type[NodeStrategy]) -> None:

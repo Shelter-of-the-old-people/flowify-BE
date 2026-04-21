@@ -3,6 +3,23 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 
+# v2 테스트 헬퍼: node dict와 canonical payload 사용
+_DEFAULT_NODE = {
+    "id": "n1",
+    "type": "llm",
+    "runtime_type": "llm",
+    "runtime_config": {},
+    "config": {},
+}
+
+
+def _node(**overrides):
+    n = {**_DEFAULT_NODE, **overrides}
+    if "action" in overrides and "runtime_config" not in overrides:
+        n["runtime_config"] = {"action": overrides.pop("action")}
+    return n
+
+
 # ── execute (action routing) ──
 
 
@@ -16,10 +33,14 @@ async def test_llm_node_summarize():
         node = LLMNodeStrategy(config={"action": "summarize"})
         node._llm_service = mock_instance
 
-        result = await node.execute({"text": "긴 텍스트"})
+        result = await node.execute(
+            node=_node(runtime_config={"action": "summarize", "output_data_type": "TEXT"}),
+            input_data={"type": "TEXT", "content": "긴 텍스트"},
+            service_tokens={},
+        )
 
-    assert result["llm_result"] == "요약 결과"
-    assert result["text"] == "긴 텍스트"
+    assert result["type"] == "TEXT"
+    assert result["content"] == "요약 결과"
     mock_instance.summarize.assert_called_once_with("긴 텍스트")
 
 
@@ -33,9 +54,13 @@ async def test_llm_node_classify():
         node = LLMNodeStrategy(config={"action": "classify", "categories": ["긍정", "부정"]})
         node._llm_service = mock_instance
 
-        result = await node.execute({"text": "좋은 제품"})
+        result = await node.execute(
+            node=_node(runtime_config={"action": "classify", "categories": ["긍정", "부정"]}),
+            input_data={"type": "TEXT", "content": "좋은 제품"},
+            service_tokens={},
+        )
 
-    assert result["llm_result"] == "긍정"
+    assert result["content"] == "긍정"
     mock_instance.classify.assert_called_once_with("좋은 제품", ["긍정", "부정"])
 
 
@@ -49,9 +74,13 @@ async def test_llm_node_process_default():
         node = LLMNodeStrategy(config={"action": "process", "prompt": "분석해줘"})
         node._llm_service = mock_instance
 
-        result = await node.execute({"data": "입력 데이터"})
+        result = await node.execute(
+            node=_node(runtime_config={"action": "process", "prompt": "분석해줘"}),
+            input_data={"type": "TEXT", "content": "입력 데이터"},
+            service_tokens={},
+        )
 
-    assert result["llm_result"] == "처리 결과"
+    assert result["content"] == "처리 결과"
     mock_instance.process.assert_called_once()
 
 
@@ -65,16 +94,20 @@ async def test_llm_node_default_action_is_process():
         node = LLMNodeStrategy(config={"prompt": "요청"})
         node._llm_service = mock_instance
 
-        result = await node.execute({"key": "value"})
+        result = await node.execute(
+            node=_node(config={"prompt": "요청"}),
+            input_data={"type": "TEXT", "content": "value"},
+            service_tokens={},
+        )
 
-    assert result["llm_result"] == "결과"
+    assert result["content"] == "결과"
     mock_instance.process.assert_called_once()
 
 
-# ── _extract_text ──
+# ── canonical payload 텍스트 추출 ──
 
 
-async def test_extract_text_prefers_llm_result():
+async def test_extract_text_from_single_email():
     with patch("app.core.nodes.llm_node.LLMService") as MockService:
         mock_instance = MockService.return_value
         mock_instance.summarize = AsyncMock(return_value="요약")
@@ -84,12 +117,18 @@ async def test_extract_text_prefers_llm_result():
         node = LLMNodeStrategy(config={"action": "summarize"})
         node._llm_service = mock_instance
 
-        await node.execute({"llm_result": "이전 결과", "text": "원본 텍스트"})
+        await node.execute(
+            node=_node(runtime_config={"action": "summarize"}),
+            input_data={"type": "SINGLE_EMAIL", "subject": "제목", "body": "본문 내용"},
+            service_tokens={},
+        )
 
-    mock_instance.summarize.assert_called_once_with("이전 결과")
+    call_args = mock_instance.summarize.call_args[0][0]
+    assert "제목" in call_args
+    assert "본문 내용" in call_args
 
 
-async def test_extract_text_falls_back_to_text_field():
+async def test_extract_text_from_spreadsheet():
     with patch("app.core.nodes.llm_node.LLMService") as MockService:
         mock_instance = MockService.return_value
         mock_instance.summarize = AsyncMock(return_value="요약")
@@ -99,9 +138,14 @@ async def test_extract_text_falls_back_to_text_field():
         node = LLMNodeStrategy(config={"action": "summarize"})
         node._llm_service = mock_instance
 
-        await node.execute({"text": "텍스트 내용"})
+        await node.execute(
+            node=_node(runtime_config={"action": "summarize"}),
+            input_data={"type": "SPREADSHEET_DATA", "headers": ["이름", "점수"], "rows": [["홍길동", "95"]]},
+            service_tokens={},
+        )
 
-    mock_instance.summarize.assert_called_once_with("텍스트 내용")
+    call_args = mock_instance.summarize.call_args[0][0]
+    assert "홍길동" in call_args
 
 
 # ── validate ──
@@ -111,22 +155,35 @@ def test_validate_process_requires_prompt():
     with patch("app.core.nodes.llm_node.LLMService"):
         from app.core.nodes.llm_node import LLMNodeStrategy
 
-        assert LLMNodeStrategy(config={"action": "process", "prompt": "test"}).validate() is True
-        assert LLMNodeStrategy(config={"action": "process"}).validate() is False
-        assert LLMNodeStrategy(config={"prompt": "test"}).validate() is True  # default=process
-        assert LLMNodeStrategy(config={}).validate() is False
+        node_dict = _node()
+        assert LLMNodeStrategy(config={"action": "process", "prompt": "test"}).validate(
+            {**node_dict, "runtime_config": {"action": "process", "prompt": "test"}}
+        ) is True
+        assert LLMNodeStrategy(config={"action": "process"}).validate(
+            {**node_dict, "runtime_config": {"action": "process"}}
+        ) is False
+        assert LLMNodeStrategy(config={"prompt": "test"}).validate(
+            {**node_dict, "runtime_config": {"prompt": "test"}}
+        ) is True
+        assert LLMNodeStrategy(config={}).validate(node_dict) is False
 
 
 def test_validate_summarize_classify_no_prompt_needed():
     with patch("app.core.nodes.llm_node.LLMService"):
         from app.core.nodes.llm_node import LLMNodeStrategy
 
-        assert LLMNodeStrategy(config={"action": "summarize"}).validate() is True
-        assert LLMNodeStrategy(config={"action": "classify"}).validate() is True
+        assert LLMNodeStrategy(config={"action": "summarize"}).validate(
+            _node(runtime_config={"action": "summarize"})
+        ) is True
+        assert LLMNodeStrategy(config={"action": "classify"}).validate(
+            _node(runtime_config={"action": "classify"})
+        ) is True
 
 
 def test_validate_unknown_action():
     with patch("app.core.nodes.llm_node.LLMService"):
         from app.core.nodes.llm_node import LLMNodeStrategy
 
-        assert LLMNodeStrategy(config={"action": "unknown"}).validate() is False
+        assert LLMNodeStrategy(config={"action": "unknown"}).validate(
+            _node(runtime_config={"action": "unknown"})
+        ) is False
