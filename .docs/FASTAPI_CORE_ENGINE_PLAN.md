@@ -2,6 +2,8 @@
 
 > **문서 목적**: Phase 2 개발 단계인 워크플로우 실행 엔진과 핵심 LLM 서비스의 구체적인 구현 계획을 정의합니다.
 
+> **⚠️ v2 안내 (2026-04-23)**: 이 문서는 초기 계획 단계에서 작성되었습니다. `NodeFactory.create(type, config)` → `create_from_node_def(node_def)`, `node.execute(input_data)` → `node.execute(node, input_data, service_tokens)` 등 v2 런타임 컨트랙트로 전면 교체되었습니다. 현재 구현 기준은 `FASTAPI_CONTRACT_SPEC.md`, `FASTAPI_IMPLEMENTATION_GUIDE.md`를 참고하세요.
+
 ---
 
 ## 1. Phase 2: 워크플로우 실행 엔진 및 LLM 서비스 구현
