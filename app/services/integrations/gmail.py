@@ -9,9 +9,7 @@ GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"
 class GmailService(BaseIntegrationService):
     """Gmail API 연동 서비스 (DC-F0406)."""
 
-    async def list_messages(
-        self, token: str, query: str = "", max_results: int = 20
-    ) -> list[dict]:
+    async def list_messages(self, token: str, query: str = "", max_results: int = 20) -> list[dict]:
         """메일 목록 조회 후 각 메일의 상세 정보를 반환합니다."""
         params = {"maxResults": max_results}
         if query:
@@ -29,7 +27,9 @@ class GmailService(BaseIntegrationService):
     async def get_message(self, token: str, message_id: str) -> dict:
         """단일 메일 상세 조회."""
         data = await self._request(
-            "GET", f"{GMAIL_API}/messages/{message_id}", token,
+            "GET",
+            f"{GMAIL_API}/messages/{message_id}",
+            token,
             params={"format": "full"},
         )
 
@@ -46,9 +46,7 @@ class GmailService(BaseIntegrationService):
             "snippet": data.get("snippet", ""),
         }
 
-    async def send_message(
-        self, token: str, to: str, subject: str, body: str
-    ) -> dict:
+    async def send_message(self, token: str, to: str, subject: str, body: str) -> dict:
         """메일 전송."""
         mime = MIMEText(body, "plain", "utf-8")
         mime["to"] = to
@@ -56,7 +54,9 @@ class GmailService(BaseIntegrationService):
         raw = base64.urlsafe_b64encode(mime.as_bytes()).decode()
 
         return await self._request(
-            "POST", f"{GMAIL_API}/messages/send", token,
+            "POST",
+            f"{GMAIL_API}/messages/send",
+            token,
             json={"raw": raw},
         )
 
@@ -64,10 +64,14 @@ class GmailService(BaseIntegrationService):
     def _extract_body(payload: dict) -> str:
         """메일 payload에서 본문 텍스트를 추출합니다."""
         if "body" in payload and payload["body"].get("data"):
-            return base64.urlsafe_b64decode(payload["body"]["data"]).decode("utf-8", errors="replace")
+            return base64.urlsafe_b64decode(payload["body"]["data"]).decode(
+                "utf-8", errors="replace"
+            )
 
         for part in payload.get("parts", []):
             if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
-                return base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8", errors="replace")
+                return base64.urlsafe_b64decode(part["body"]["data"]).decode(
+                    "utf-8", errors="replace"
+                )
 
         return ""

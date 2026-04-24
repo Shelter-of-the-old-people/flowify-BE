@@ -6,13 +6,13 @@
 참조: FASTAPI_IMPLEMENTATION_GUIDE.md 섹션 8
 """
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class CanonicalType(str, Enum):
+class CanonicalType(StrEnum):
     SINGLE_FILE = "SINGLE_FILE"
     FILE_LIST = "FILE_LIST"
     SINGLE_EMAIL = "SINGLE_EMAIL"

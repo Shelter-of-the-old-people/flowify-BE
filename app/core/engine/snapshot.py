@@ -9,11 +9,13 @@ class SnapshotManager:
         self._snapshots: list[dict] = []
 
     def save(self, node_id: str, data: dict) -> None:
-        self._snapshots.append({
-            "node_id": node_id,
-            "data": copy.deepcopy(data),
-            "timestamp": datetime.utcnow().isoformat(),
-        })
+        self._snapshots.append(
+            {
+                "node_id": node_id,
+                "data": copy.deepcopy(data),
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        )
 
     def get_snapshot(self, node_id: str) -> dict | None:
         for snapshot in reversed(self._snapshots):

@@ -17,8 +17,21 @@ from app.services.integrations.slack import SlackService
 
 # Phase 1 지원 source 맵
 SUPPORTED_SOURCES: dict[str, set[str]] = {
-    "google_drive": {"single_file", "file_changed", "new_file", "folder_new_file", "folder_all_files"},
-    "gmail": {"single_email", "new_email", "sender_email", "starred_email", "label_emails", "attachment_email"},
+    "google_drive": {
+        "single_file",
+        "file_changed",
+        "new_file",
+        "folder_new_file",
+        "folder_all_files",
+    },
+    "gmail": {
+        "single_email",
+        "new_email",
+        "sender_email",
+        "starred_email",
+        "label_emails",
+        "attachment_email",
+    },
     "google_sheets": {"sheet_all", "new_row", "row_updated"},
     "slack": {"channel_messages"},
 }
@@ -220,14 +233,14 @@ class InputNodeStrategy(NodeStrategy):
 
     # ── Slack ──
 
-    async def _fetch_slack(
-        self, token: str, mode: str, target: str
-    ) -> dict[str, Any]:
+    async def _fetch_slack(self, token: str, mode: str, target: str) -> dict[str, Any]:
         if mode == "channel_messages":
             svc = SlackService()
             # conversations.history API 호출
             data = await svc._request(
-                "GET", "https://slack.com/api/conversations.history", token,
+                "GET",
+                "https://slack.com/api/conversations.history",
+                token,
                 params={"channel": target, "limit": 20},
             )
             messages = data.get("messages", [])

@@ -6,14 +6,14 @@ from app.core.engine.state import WorkflowState
 
 
 class NodeSnapshot(BaseModel):
-    capturedAt: datetime = Field(default_factory=datetime.utcnow)
-    stateData: dict = Field(default_factory=dict)
+    capturedAt: datetime = Field(default_factory=datetime.utcnow)  # noqa: N815
+    stateData: dict = Field(default_factory=dict)  # noqa: N815
 
 
 class ErrorDetail(BaseModel):
     code: str
     message: str
-    stackTrace: str | None = None
+    stackTrace: str | None = None  # noqa: N815
 
 
 class NodeExecutionLog(BaseModel):
@@ -22,14 +22,14 @@ class NodeExecutionLog(BaseModel):
     Spring Boot가 직접 읽는 MongoDB 스키마와 일치하도록 camelCase 필드명을 사용합니다.
     """
 
-    nodeId: str
+    nodeId: str  # noqa: N815
     status: str = "pending"
-    inputData: dict = Field(default_factory=dict)
-    outputData: dict = Field(default_factory=dict)
+    inputData: dict = Field(default_factory=dict)  # noqa: N815
+    outputData: dict = Field(default_factory=dict)  # noqa: N815
     snapshot: NodeSnapshot | None = None
     error: ErrorDetail | None = None
-    startedAt: datetime = Field(default_factory=datetime.utcnow)
-    finishedAt: datetime | None = None
+    startedAt: datetime = Field(default_factory=datetime.utcnow)  # noqa: N815
+    finishedAt: datetime | None = None  # noqa: N815
 
 
 class WorkflowExecution(BaseModel):
@@ -42,10 +42,10 @@ class WorkflowExecution(BaseModel):
     (executor.py _save_execution 참고)
     """
 
-    workflowId: str
-    userId: str
+    workflowId: str  # noqa: N815
+    userId: str  # noqa: N815
     state: WorkflowState = WorkflowState.PENDING
-    nodeLogs: list[NodeExecutionLog] = Field(default_factory=list)
-    errorMessage: str | None = None
-    startedAt: datetime = Field(default_factory=datetime.utcnow)
-    finishedAt: datetime | None = None
+    nodeLogs: list[NodeExecutionLog] = Field(default_factory=list)  # noqa: N815
+    errorMessage: str | None = None  # noqa: N815
+    startedAt: datetime = Field(default_factory=datetime.utcnow)  # noqa: N815
+    finishedAt: datetime | None = None  # noqa: N815

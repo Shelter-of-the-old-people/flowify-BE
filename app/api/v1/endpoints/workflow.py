@@ -1,4 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks, Depends
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.api.v1.deps import get_db, get_user_id
 from app.core.engine.executor import WorkflowExecutor, register_cancellation_event
@@ -9,7 +10,6 @@ from app.models.requests import (
     WorkflowExecuteRequest,
 )
 from app.services.llm_service import LLMService
-from motor.motor_asyncio import AsyncIOMotorDatabase
 
 router = APIRouter()
 

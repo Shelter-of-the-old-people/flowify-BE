@@ -4,7 +4,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import settings
 
-
 EXCLUDED_PATHS = {"/api/v1/health", "/docs", "/redoc", "/openapi.json"}
 
 

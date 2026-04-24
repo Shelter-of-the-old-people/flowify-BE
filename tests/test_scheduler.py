@@ -3,10 +3,6 @@
 APScheduler 기반 스케줄링 서비스의 CRUD 동작 검증.
 """
 
-import pytest
-
-from app.services.scheduler_service import SchedulerService
-
 
 # TODO: test_scheduler_start_stop
 # TODO: test_add_cron_job_and_get_job

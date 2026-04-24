@@ -51,7 +51,9 @@ class TestWebCrawlerService:
                 raise FlowifyException.__new__(FlowifyException)
             return "<html><body>OK</body></html>"
 
-        with patch.object(crawler, "_fetch_with_retry", new_callable=AsyncMock, side_effect=side_effect):
+        with patch.object(
+            crawler, "_fetch_with_retry", new_callable=AsyncMock, side_effect=side_effect
+        ):
             results = await crawler.crawl_multiple(
                 ["https://ok.com", "https://fail.com"],
             )

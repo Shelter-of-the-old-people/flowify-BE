@@ -45,15 +45,15 @@ class TestGmailService:
             assert result["id"] == "sent_1"
             # raw 필드가 base64 인코딩되어 전송되는지 확인
             call_kwargs = mock_req.call_args
-            assert "raw" in call_kwargs.kwargs.get("json", {}) or "raw" in (call_kwargs[1].get("json", {}) if len(call_kwargs) > 1 else {})
+            assert "raw" in call_kwargs.kwargs.get("json", {}) or "raw" in (
+                call_kwargs[1].get("json", {}) if len(call_kwargs) > 1 else {}
+            )
 
     @pytest.mark.asyncio
     async def test_list_messages(self, gmail):
         with patch.object(gmail, "_request", new_callable=AsyncMock) as mock_req:
             # list 호출 → 메시지 ID 목록 반환
-            mock_req.return_value = {
-                "messages": [{"id": "msg_1"}, {"id": "msg_2"}]
-            }
+            mock_req.return_value = {"messages": [{"id": "msg_1"}, {"id": "msg_2"}]}
             # get_message도 mock
             with patch.object(gmail, "get_message", new_callable=AsyncMock) as mock_get:
                 mock_get.return_value = {"id": "msg_1", "subject": "Test"}

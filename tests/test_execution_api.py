@@ -1,7 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from fastapi.testclient import TestClient
+import pytest
 
 from app.main import app
 
@@ -15,6 +15,7 @@ AUTH_HEADERS = {
 @pytest.fixture()
 def client():
     from unittest.mock import patch
+
     with patch("app.api.v1.middleware.settings") as mock_settings:
         mock_settings.INTERNAL_API_SECRET = TEST_SECRET
         yield TestClient(app, raise_server_exceptions=False)
@@ -46,6 +47,7 @@ def mock_execution_doc():
 class TestGetExecutionStatus:
     def test_not_found(self, client):
         from app.api.v1.deps import get_db
+
         mock_db = MagicMock()
         mock_db.workflow_executions.find_one = AsyncMock(return_value=None)
         app.dependency_overrides[get_db] = lambda: mock_db
@@ -62,6 +64,7 @@ class TestGetExecutionStatus:
 
     def test_found_returns_camel_execution_id(self, client, mock_execution_doc):
         from app.api.v1.deps import get_db
+
         mock_db = MagicMock()
         mock_db.workflow_executions.find_one = AsyncMock(return_value=mock_execution_doc)
         app.dependency_overrides[get_db] = lambda: mock_db
@@ -82,6 +85,7 @@ class TestGetExecutionStatus:
 class TestGetExecutionLogs:
     def test_found(self, client, mock_execution_doc):
         from app.api.v1.deps import get_db
+
         mock_db = MagicMock()
         mock_db.workflow_executions.find_one = AsyncMock(return_value=mock_execution_doc)
         app.dependency_overrides[get_db] = lambda: mock_db
@@ -112,6 +116,7 @@ class TestRollbackExecution:
         }
 
         from app.api.v1.deps import get_db
+
         mock_db = MagicMock()
         mock_db.workflow_executions.find_one = AsyncMock(return_value=doc)
         mock_db.workflow_executions.update_one = AsyncMock()
@@ -141,6 +146,7 @@ class TestRollbackExecution:
         }
 
         from app.api.v1.deps import get_db
+
         mock_db = MagicMock()
         mock_db.workflow_executions.find_one = AsyncMock(return_value=doc)
         mock_db.workflow_executions.update_one = AsyncMock()
@@ -168,6 +174,7 @@ class TestRollbackExecution:
         }
 
         from app.api.v1.deps import get_db
+
         mock_db = MagicMock()
         mock_db.workflow_executions.find_one = AsyncMock(return_value=doc)
         mock_db.workflow_executions.update_one = AsyncMock()
@@ -190,6 +197,7 @@ class TestRollbackExecution:
         doc = {"_id": "exec_abc123", "state": "success", "nodeLogs": []}
 
         from app.api.v1.deps import get_db
+
         mock_db = MagicMock()
         mock_db.workflow_executions.find_one = AsyncMock(return_value=doc)
         app.dependency_overrides[get_db] = lambda: mock_db
@@ -211,6 +219,7 @@ class TestStopExecution:
         doc = {"_id": "exec_abc123", "state": "running", "nodeLogs": []}
 
         from app.api.v1.deps import get_db
+
         mock_db = MagicMock()
         mock_db.workflow_executions.find_one = AsyncMock(return_value=doc)
         mock_db.workflow_executions.update_one = AsyncMock()
@@ -233,6 +242,7 @@ class TestStopExecution:
         doc = {"_id": "exec_abc123", "state": "stopped", "nodeLogs": []}
 
         from app.api.v1.deps import get_db
+
         mock_db = MagicMock()
         mock_db.workflow_executions.find_one = AsyncMock(return_value=doc)
         mock_db.workflow_executions.update_one = AsyncMock()
@@ -255,6 +265,7 @@ class TestStopExecution:
         doc = {"_id": "exec_abc123", "state": "success", "nodeLogs": []}
 
         from app.api.v1.deps import get_db
+
         mock_db = MagicMock()
         mock_db.workflow_executions.find_one = AsyncMock(return_value=doc)
         mock_db.workflow_executions.update_one = AsyncMock()
@@ -274,6 +285,7 @@ class TestStopExecution:
     def test_stop_not_found(self, client):
         """실행 ID 없음 → 404."""
         from app.api.v1.deps import get_db
+
         mock_db = MagicMock()
         mock_db.workflow_executions.find_one = AsyncMock(return_value=None)
         app.dependency_overrides[get_db] = lambda: mock_db

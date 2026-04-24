@@ -26,7 +26,9 @@ class GoogleCalendarService(BaseIntegrationService):
             params["timeMax"] = time_max
 
         data = await self._request(
-            "GET", f"{CALENDAR_API}/calendars/{calendar_id}/events", token,
+            "GET",
+            f"{CALENDAR_API}/calendars/{calendar_id}/events",
+            token,
             params=params,
         )
         return [
@@ -49,16 +51,24 @@ class GoogleCalendarService(BaseIntegrationService):
         event 예시: {"summary": "회의", "start": {"dateTime": "..."}, "end": {"dateTime": "..."}}
         """
         return await self._request(
-            "POST", f"{CALENDAR_API}/calendars/{calendar_id}/events", token,
+            "POST",
+            f"{CALENDAR_API}/calendars/{calendar_id}/events",
+            token,
             json=event or {},
         )
 
     async def list_calendars(self, token: str) -> list[dict]:
         """사용자 캘린더 목록을 조회합니다."""
         data = await self._request(
-            "GET", f"{CALENDAR_API}/users/me/calendarList", token,
+            "GET",
+            f"{CALENDAR_API}/users/me/calendarList",
+            token,
         )
         return [
-            {"id": cal.get("id"), "summary": cal.get("summary", ""), "primary": cal.get("primary", False)}
+            {
+                "id": cal.get("id"),
+                "summary": cal.get("summary", ""),
+                "primary": cal.get("primary", False),
+            }
             for cal in data.get("items", [])
         ]

@@ -55,7 +55,7 @@ class BaseIntegrationService:
                 if resp.status_code == 401:
                     raise FlowifyException(
                         ErrorCode.OAUTH_TOKEN_INVALID,
-                        detail=f"OAuth 토큰이 만료되었거나 유효하지 않습니다.",
+                        detail="OAuth 토큰이 만료되었거나 유효하지 않습니다.",
                         context={"url": url, "status": 401},
                     )
 
@@ -76,8 +76,10 @@ class BaseIntegrationService:
 
             # 지수 백오프 대기
             if attempt < BaseIntegrationService.MAX_RETRIES - 1:
-                wait = BaseIntegrationService.BASE_BACKOFF * (2 ** attempt)
-                logger.warning(f"외부 API 재시도 {attempt + 1}/{BaseIntegrationService.MAX_RETRIES}: {url} ({wait}s 대기)")
+                wait = BaseIntegrationService.BASE_BACKOFF * (2**attempt)
+                logger.warning(
+                    f"외부 API 재시도 {attempt + 1}/{BaseIntegrationService.MAX_RETRIES}: {url} ({wait}s 대기)"
+                )
                 await asyncio.sleep(wait)
 
         raise FlowifyException(

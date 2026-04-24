@@ -12,7 +12,9 @@ class GoogleDriveService(BaseIntegrationService):
         """폴더 내 파일 목록을 조회합니다."""
         query = f"'{folder_id}' in parents and trashed=false" if folder_id else "trashed=false"
         data = await self._request(
-            "GET", f"{DRIVE_API}/files", token,
+            "GET",
+            f"{DRIVE_API}/files",
+            token,
             params={
                 "q": query,
                 "pageSize": max_results,
@@ -28,7 +30,9 @@ class GoogleDriveService(BaseIntegrationService):
         """
         # 먼저 메타데이터 조회
         meta = await self._request(
-            "GET", f"{DRIVE_API}/files/{file_id}", token,
+            "GET",
+            f"{DRIVE_API}/files/{file_id}",
+            token,
             params={"fields": "id,name,mimeType,size"},
         )
         mime = meta.get("mimeType", "")
@@ -42,12 +46,16 @@ class GoogleDriveService(BaseIntegrationService):
 
         if mime in export_map:
             content = await self._request(
-                "GET", f"{DRIVE_API}/files/{file_id}/export", token,
+                "GET",
+                f"{DRIVE_API}/files/{file_id}/export",
+                token,
                 params={"mimeType": export_map[mime]},
             )
         else:
             content = await self._request(
-                "GET", f"{DRIVE_API}/files/{file_id}", token,
+                "GET",
+                f"{DRIVE_API}/files/{file_id}",
+                token,
                 params={"alt": "media"},
             )
 
@@ -67,7 +75,9 @@ class GoogleDriveService(BaseIntegrationService):
             metadata["parents"] = [folder_id]
 
         return await self._request(
-            "POST", f"{DRIVE_API}/files", token,
+            "POST",
+            f"{DRIVE_API}/files",
+            token,
             json=metadata,
             params={"uploadType": "multipart"},
         )

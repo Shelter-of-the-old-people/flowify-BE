@@ -35,15 +35,13 @@ class WebCrawlerService:
             "data": extracted,
         }
 
-    async def crawl_multiple(
-        self, urls: list[str], selectors: dict | None = None
-    ) -> list[dict]:
+    async def crawl_multiple(self, urls: list[str], selectors: dict | None = None) -> list[dict]:
         """복수 URL을 병렬 크롤링합니다."""
         tasks = [self.crawl(url, selectors) for url in urls]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         output = []
-        for url, result in zip(urls, results):
+        for url, result in zip(urls, results, strict=False):
             if isinstance(result, Exception):
                 logger.warning(f"크롤링 실패: {url} - {result}")
                 output.append({"url": url, "data": {}, "error": str(result)})
@@ -68,8 +66,10 @@ class WebCrawlerService:
             except (httpx.HTTPError, httpx.ConnectError, httpx.ReadTimeout) as e:
                 last_exc = e
                 if attempt < MAX_RETRIES:
-                    wait = BASE_BACKOFF * (2 ** attempt)
-                    logger.warning(f"크롤링 재시도 {attempt + 1}/{MAX_RETRIES}: {url} ({wait}s 대기)")
+                    wait = BASE_BACKOFF * (2**attempt)
+                    logger.warning(
+                        f"크롤링 재시도 {attempt + 1}/{MAX_RETRIES}: {url} ({wait}s 대기)"
+                    )
                     await asyncio.sleep(wait)
 
         raise FlowifyException(
