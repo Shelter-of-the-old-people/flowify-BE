@@ -24,7 +24,7 @@ SUPPORTED_SINKS = {"slack", "gmail", "notion", "google_drive", "google_sheets", 
 
 ACCEPTED_INPUT_TYPES: dict[str, set[str]] = {
     "slack": {"TEXT"},
-    "gmail": {"TEXT", "SINGLE_FILE", "FILE_LIST"},
+    "gmail": {"TEXT", "SINGLE_FILE", "FILE_LIST", "SINGLE_EMAIL"},
     "notion": {"TEXT", "SPREADSHEET_DATA", "API_RESPONSE"},
     "google_drive": {"TEXT", "SINGLE_FILE", "FILE_LIST", "SPREADSHEET_DATA"},
     "google_sheets": {"TEXT", "SPREADSHEET_DATA", "API_RESPONSE"},
@@ -112,9 +112,7 @@ class OutputNodeStrategy(NodeStrategy):
 
     # ── Slack ──
 
-    async def _send_slack(
-        self, token: str, config: dict, input_data: dict
-    ) -> dict:
+    async def _send_slack(self, token: str, config: dict, input_data: dict) -> dict:
         channel = config["channel"]
         message = input_data.get("content", "")
         svc = SlackService()
@@ -122,9 +120,7 @@ class OutputNodeStrategy(NodeStrategy):
 
     # ── Gmail ──
 
-    async def _send_gmail(
-        self, token: str, config: dict, input_data: dict
-    ) -> dict:
+    async def _send_gmail(self, token: str, config: dict, input_data: dict) -> dict:
         to = config["to"]
         subject = config["subject"]
         action = config.get("action", "send")
@@ -147,9 +143,7 @@ class OutputNodeStrategy(NodeStrategy):
 
     # ── Notion ──
 
-    async def _send_notion(
-        self, token: str, config: dict, input_data: dict
-    ) -> dict:
+    async def _send_notion(self, token: str, config: dict, input_data: dict) -> dict:
         target_type = config["target_type"]
         target_id = config["target_id"]
         data_type = input_data.get("type", "TEXT")
@@ -170,9 +164,7 @@ class OutputNodeStrategy(NodeStrategy):
 
     # ── Google Drive ──
 
-    async def _send_google_drive(
-        self, token: str, config: dict, input_data: dict
-    ) -> dict:
+    async def _send_google_drive(self, token: str, config: dict, input_data: dict) -> dict:
         folder_id = config.get("folder_id")
         data_type = input_data.get("type", "TEXT")
         svc = GoogleDriveService()
@@ -198,9 +190,7 @@ class OutputNodeStrategy(NodeStrategy):
 
     # ── Google Sheets ──
 
-    async def _send_google_sheets(
-        self, token: str, config: dict, input_data: dict
-    ) -> dict:
+    async def _send_google_sheets(self, token: str, config: dict, input_data: dict) -> dict:
         spreadsheet_id = config["spreadsheet_id"]
         write_mode = config.get("write_mode", "append")
         sheet_name = config.get("sheet_name", "Sheet1")
@@ -223,11 +213,8 @@ class OutputNodeStrategy(NodeStrategy):
 
     # ── Google Calendar ──
 
-    async def _send_google_calendar(
-        self, token: str, config: dict, input_data: dict
-    ) -> dict:
+    async def _send_google_calendar(self, token: str, config: dict, input_data: dict) -> dict:
         calendar_id = config.get("calendar_id", "primary")
-        action = config.get("action", "create")
         data_type = input_data.get("type", "TEXT")
         svc = GoogleCalendarService()
 
