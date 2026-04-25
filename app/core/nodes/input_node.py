@@ -140,19 +140,40 @@ class InputNodeStrategy(NodeStrategy):
         if mode == "new_email":
             msgs = await svc.list_messages(token, query="", max_results=1)
             if not msgs:
-                return {"type": "SINGLE_EMAIL", "subject": "", "from": "", "date": "", "body": ""}
+                return {
+                    "type": "SINGLE_EMAIL",
+                    "subject": "",
+                    "from": "",
+                    "date": "",
+                    "body": "",
+                    "attachments": [],
+                }
             return self._to_single_email(msgs[0])
 
         if mode == "sender_email":
             msgs = await svc.list_messages(token, query=f"from:{target}", max_results=1)
             if not msgs:
-                return {"type": "SINGLE_EMAIL", "subject": "", "from": "", "date": "", "body": ""}
+                return {
+                    "type": "SINGLE_EMAIL",
+                    "subject": "",
+                    "from": "",
+                    "date": "",
+                    "body": "",
+                    "attachments": [],
+                }
             return self._to_single_email(msgs[0])
 
         if mode == "starred_email":
             msgs = await svc.list_messages(token, query="is:starred", max_results=1)
             if not msgs:
-                return {"type": "SINGLE_EMAIL", "subject": "", "from": "", "date": "", "body": ""}
+                return {
+                    "type": "SINGLE_EMAIL",
+                    "subject": "",
+                    "from": "",
+                    "date": "",
+                    "body": "",
+                    "attachments": [],
+                }
             return self._to_single_email(msgs[0])
 
         if mode == "label_emails":
@@ -172,10 +193,12 @@ class InputNodeStrategy(NodeStrategy):
 
         if mode == "attachment_email":
             msgs = await svc.list_messages(token, query="has:attachment", max_results=1)
-            # 첨부파일 메타데이터 추출 (실제 파일 다운로드는 추후 구현)
+            items = []
+            for msg in msgs:
+                items.extend(self._to_file_items(msg.get("attachments", [])))
             return {
                 "type": "FILE_LIST",
-                "items": [],  # TODO: 첨부파일 메타데이터 추출
+                "items": items,
             }
 
         raise FlowifyException(
@@ -191,8 +214,20 @@ class InputNodeStrategy(NodeStrategy):
             "from": msg.get("from", ""),
             "date": msg.get("date", ""),
             "body": msg.get("body", ""),
-            "attachments": [],
+            "attachments": InputNodeStrategy._to_file_items(msg.get("attachments", [])),
         }
+
+    @staticmethod
+    def _to_file_items(attachments: list[dict]) -> list[dict[str, Any]]:
+        return [
+            {
+                "filename": attachment.get("filename", ""),
+                "mime_type": attachment.get("mime_type", attachment.get("mimeType", "")),
+                "size": attachment.get("size"),
+                "url": attachment.get("url", ""),
+            }
+            for attachment in attachments
+        ]
 
     # ── Google Sheets ──
 

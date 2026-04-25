@@ -5,12 +5,11 @@
 
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from fastapi.testclient import TestClient
+import pytest
 
 from app.main import app
 from app.models.workflow import EdgeDefinition, NodeDefinition
-
 
 # ── HTTP 클라이언트 ──────────────────────────────────────────────
 
@@ -92,4 +91,5 @@ def service_tokens() -> dict:
         "notion": "test_notion_token",
         "google_drive": "test_drive_token",
         "google_sheets": "test_sheets_token",
+        "google_calendar": "test_calendar_token",
     }

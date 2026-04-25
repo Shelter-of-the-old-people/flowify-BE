@@ -1,11 +1,9 @@
-"""OutputNodeStrategy — runtime_sink 기반 외부 서비스 전달.
+"""OutputNodeStrategy for runtime_sink based external service delivery."""
 
-이전 노드의 canonical payload를 받아서 runtime_sink가 지정한
-외부 서비스에 데이터를 전송/저장/생성한다.
-
-참조: FASTAPI_IMPLEMENTATION_GUIDE.md 섹션 6
-"""
-
+import base64
+import csv
+import io
+import json
 import logging
 from typing import Any
 
@@ -24,7 +22,7 @@ SUPPORTED_SINKS = {"slack", "gmail", "notion", "google_drive", "google_sheets", 
 
 ACCEPTED_INPUT_TYPES: dict[str, set[str]] = {
     "slack": {"TEXT"},
-    "gmail": {"TEXT", "SINGLE_FILE", "FILE_LIST", "SINGLE_EMAIL"},
+    "gmail": {"TEXT", "SINGLE_FILE", "FILE_LIST"},
     "notion": {"TEXT", "SPREADSHEET_DATA", "API_RESPONSE"},
     "google_drive": {"TEXT", "SINGLE_FILE", "FILE_LIST", "SPREADSHEET_DATA"},
     "google_sheets": {"TEXT", "SPREADSHEET_DATA", "API_RESPONSE"},
@@ -42,7 +40,7 @@ REQUIRED_CONFIG: dict[str, list[str]] = {
 
 
 class OutputNodeStrategy(NodeStrategy):
-    """출력 노드 — canonical payload를 외부 서비스에 전달."""
+    """Deliver canonical payloads to runtime sinks."""
 
     async def execute(
         self,
@@ -52,7 +50,6 @@ class OutputNodeStrategy(NodeStrategy):
     ) -> dict[str, Any]:
         runtime_sink = node.get("runtime_sink")
         if not runtime_sink:
-            # transition fallback: console 출력
             logger.info("OutputNode fallback: %s", input_data)
             return {"status": "sent", "service": "console", "detail": {}}
 
@@ -65,7 +62,6 @@ class OutputNodeStrategy(NodeStrategy):
                 detail=f"service={service} is not supported in current runtime phase",
             )
 
-        # input_type 호환성 검증
         if input_data:
             data_type = input_data.get("type", "")
             accepted = ACCEPTED_INPUT_TYPES.get(service, set())
@@ -79,7 +75,7 @@ class OutputNodeStrategy(NodeStrategy):
         if not token:
             raise FlowifyException(
                 ErrorCode.OAUTH_TOKEN_INVALID,
-                detail=f"'{service}' 서비스 토큰이 없습니다.",
+                detail=f"'{service}' service token is missing.",
             )
 
         if service == "slack":
@@ -110,38 +106,32 @@ class OutputNodeStrategy(NodeStrategy):
         required = REQUIRED_CONFIG.get(service, [])
         return all(config.get(f) for f in required)
 
-    # ── Slack ──
-
     async def _send_slack(self, token: str, config: dict, input_data: dict) -> dict:
         channel = config["channel"]
         message = input_data.get("content", "")
         svc = SlackService()
         return await svc.send_message(token, channel, message)
 
-    # ── Gmail ──
-
     async def _send_gmail(self, token: str, config: dict, input_data: dict) -> dict:
         to = config["to"]
         subject = config["subject"]
-        action = config.get("action", "send")
-        data_type = input_data.get("type", "TEXT")
+        action = config.get("action", "send").lower()
+        if action not in {"send", "draft"}:
+            raise FlowifyException(
+                ErrorCode.INVALID_REQUEST,
+                detail=f"Gmail action must be 'send' or 'draft', got '{action}'.",
+            )
 
-        if data_type == "TEXT":
-            body = input_data.get("content", "")
-        elif data_type == "SINGLE_EMAIL":
-            body = input_data.get("body", "")
-        else:
-            body = str(input_data)
-
+        body, attachments = self._gmail_body_and_attachments(config, input_data)
         svc = GmailService()
         if action == "send":
-            return await svc.send_message(token, to, subject, body)
-        else:
-            # draft — 현재 send_message만 구현되어 있으므로 send로 fallback
-            # TODO: Gmail draft API 구현
+            if attachments:
+                return await svc.send_message(token, to, subject, body, attachments)
             return await svc.send_message(token, to, subject, body)
 
-    # ── Notion ──
+        if attachments:
+            return await svc.create_draft(token, to, subject, body, attachments)
+        return await svc.create_draft(token, to, subject, body)
 
     async def _send_notion(self, token: str, config: dict, input_data: dict) -> dict:
         target_type = config["target_type"]
@@ -153,16 +143,12 @@ class OutputNodeStrategy(NodeStrategy):
             content = input_data.get("content", "")
             if target_type == "page":
                 return await svc.create_page(token, target_id, "Flowify Output", content)
-            else:
-                return await svc.create_page(token, target_id, "Flowify Output", content)
-        elif data_type == "SPREADSHEET_DATA":
+            return await svc.create_page(token, target_id, "Flowify Output", content)
+        if data_type == "SPREADSHEET_DATA":
             rows = input_data.get("rows", [])
             content = "\n".join(", ".join(str(c) for c in row) for row in rows)
             return await svc.create_page(token, target_id, "Flowify Data", content)
-        else:
-            return await svc.create_page(token, target_id, "Flowify Output", str(input_data))
-
-    # ── Google Drive ──
+        return await svc.create_page(token, target_id, "Flowify Output", str(input_data))
 
     async def _send_google_drive(self, token: str, config: dict, input_data: dict) -> dict:
         folder_id = config.get("folder_id")
@@ -171,24 +157,44 @@ class OutputNodeStrategy(NodeStrategy):
 
         if data_type == "SINGLE_FILE":
             filename = input_data.get("filename", "output.txt")
-            content = (input_data.get("content", "") or "").encode("utf-8")
-            return await svc.upload_file(token, filename, content, folder_id)
+            content = self._to_bytes(input_data.get("content", ""))
+            mime_type = input_data.get("mime_type") or "application/octet-stream"
+            return await svc.upload_file(token, filename, content, folder_id, mime_type)
 
         if data_type == "TEXT":
-            content = (input_data.get("content", "") or "").encode("utf-8")
+            content = self._to_bytes(input_data.get("content", ""))
             file_format = config.get("file_format", "txt")
-            return await svc.upload_file(token, f"output.{file_format}", content, folder_id)
+            mime_type = config.get("mime_type", "text/plain")
+            return await svc.upload_file(token, f"output.{file_format}", content, folder_id, mime_type)
 
         if data_type == "FILE_LIST":
             results = []
-            for item in input_data.get("items", []):
-                filename = item.get("filename", "file")
-                results.append({"filename": filename, "status": "uploaded"})
-            return {"uploaded": results}
+            for index, item in enumerate(input_data.get("items", []), start=1):
+                filename = item.get("filename") or f"file_{index}"
+                mime_type = item.get("mime_type") or "application/octet-stream"
+                content = item.get("content")
+                if content is None:
+                    filename = self._metadata_filename(filename)
+                    mime_type = "application/json"
+                    content = json.dumps(item)
+                results.append(
+                    await svc.upload_file(
+                        token,
+                        filename,
+                        self._to_bytes(content),
+                        folder_id,
+                        mime_type,
+                    )
+                )
+            return {"uploaded": results, "count": len(results)}
+
+        if data_type == "SPREADSHEET_DATA":
+            sheet_name = input_data.get("sheet_name") or "spreadsheet"
+            filename = config.get("filename") or f"{sheet_name}.csv"
+            content = self._spreadsheet_to_csv(input_data).encode("utf-8")
+            return await svc.upload_file(token, filename, content, folder_id, "text/csv")
 
         return {}
-
-    # ── Google Sheets ──
 
     async def _send_google_sheets(self, token: str, config: dict, input_data: dict) -> dict:
         spreadsheet_id = config["spreadsheet_id"]
@@ -208,29 +214,36 @@ class OutputNodeStrategy(NodeStrategy):
 
         if write_mode == "overwrite":
             return await svc.write_range(token, spreadsheet_id, sheet_name, values)
-        else:
-            return await svc.append_rows(token, spreadsheet_id, sheet_name, values)
-
-    # ── Google Calendar ──
+        return await svc.append_rows(token, spreadsheet_id, sheet_name, values)
 
     async def _send_google_calendar(self, token: str, config: dict, input_data: dict) -> dict:
         calendar_id = config.get("calendar_id", "primary")
+        action = config.get("action", "create").lower()
         data_type = input_data.get("type", "TEXT")
         svc = GoogleCalendarService()
+
+        if action not in {"create", "update"}:
+            raise FlowifyException(
+                ErrorCode.INVALID_REQUEST,
+                detail=f"Calendar action must be 'create' or 'update', got '{action}'.",
+            )
 
         if data_type == "SCHEDULE_DATA":
             results = []
             for item in input_data.get("items", []):
-                event = {
-                    "summary": item.get("title", ""),
-                    "start": {"dateTime": item.get("start_time", "")},
-                    "end": {"dateTime": item.get("end_time", item.get("start_time", ""))},
-                    "location": item.get("location", ""),
-                    "description": item.get("description", ""),
-                }
-                result = await svc.create_event(token, calendar_id, event)
-                results.append(result)
-            return {"events_created": len(results)}
+                event = self._calendar_event_from_schedule_item(config, item)
+                if action == "update":
+                    event_id = item.get("event_id") or item.get("id") or config.get("event_id")
+                    if not event_id:
+                        raise FlowifyException(
+                            ErrorCode.INVALID_REQUEST,
+                            detail="Calendar update requires event_id in config or schedule item.",
+                        )
+                    results.append(await svc.update_event(token, calendar_id, event_id, event))
+                else:
+                    results.append(await svc.create_event(token, calendar_id, event))
+            result_key = "events_updated" if action == "update" else "events_created"
+            return {result_key: len(results), "results": results}
 
         if data_type == "TEXT":
             event = {
@@ -239,6 +252,96 @@ class OutputNodeStrategy(NodeStrategy):
                 "start": {"dateTime": config.get("start_time", "")},
                 "end": {"dateTime": config.get("end_time", "")},
             }
+            if action == "update":
+                event_id = config.get("event_id")
+                if not event_id:
+                    raise FlowifyException(
+                        ErrorCode.INVALID_REQUEST,
+                        detail="Calendar update requires runtime_sink.config.event_id.",
+                    )
+                return await svc.update_event(token, calendar_id, event_id, event)
             return await svc.create_event(token, calendar_id, event)
 
         return {}
+
+    @staticmethod
+    def _gmail_body_and_attachments(config: dict, input_data: dict) -> tuple[str, list[dict]]:
+        data_type = input_data.get("type", "TEXT")
+        if data_type == "TEXT":
+            return input_data.get("content", ""), []
+
+        if data_type == "SINGLE_FILE":
+            filename = input_data.get("filename", "attachment")
+            body = config.get("body") or f"Attached file: {filename}"
+            return body, [
+                {
+                    "filename": filename,
+                    "mime_type": input_data.get("mime_type") or "application/octet-stream",
+                    "content": input_data.get("content", ""),
+                }
+            ]
+
+        if data_type == "FILE_LIST":
+            items = input_data.get("items", [])
+            attachments = [
+                {
+                    "filename": item.get("filename") or "attachment",
+                    "mime_type": item.get("mime_type") or "application/octet-stream",
+                    "content": item["content"],
+                }
+                for item in items
+                if item.get("content") is not None
+            ]
+            body = config.get("body") or OutputNodeStrategy._file_list_summary(items)
+            return body, attachments
+
+        return str(input_data), []
+
+    @staticmethod
+    def _file_list_summary(items: list[dict]) -> str:
+        if not items:
+            return ""
+        lines = ["Files:"]
+        for item in items:
+            filename = item.get("filename", "")
+            mime_type = item.get("mime_type", "")
+            size = item.get("size")
+            lines.append(f"- {filename} ({mime_type}, {size} bytes)")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _calendar_event_from_schedule_item(config: dict, item: dict) -> dict:
+        return {
+            "summary": item.get("title") or config.get("event_title_template", "Flowify Event"),
+            "start": {"dateTime": item.get("start_time", "")},
+            "end": {"dateTime": item.get("end_time", item.get("start_time", ""))},
+            "location": item.get("location", ""),
+            "description": item.get("description", ""),
+        }
+
+    @staticmethod
+    def _spreadsheet_to_csv(input_data: dict) -> str:
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        headers = input_data.get("headers") or []
+        if headers:
+            writer.writerow(headers)
+        writer.writerows(input_data.get("rows", []))
+        return buffer.getvalue()
+
+    @staticmethod
+    def _metadata_filename(filename: str) -> str:
+        if filename.endswith(".json"):
+            return filename
+        return f"{filename}.metadata.json"
+
+    @staticmethod
+    def _to_bytes(content: bytes | str | None) -> bytes:
+        if content is None:
+            return b""
+        if isinstance(content, bytes):
+            return content
+        try:
+            return base64.b64decode(content, validate=True)
+        except Exception:
+            return content.encode("utf-8")

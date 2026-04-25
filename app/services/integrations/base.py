@@ -28,6 +28,7 @@ class BaseIntegrationService:
         token: str,
         *,
         json: dict | None = None,
+        content: bytes | str | None = None,
         params: dict | None = None,
         headers: dict | None = None,
         timeout: float = 30.0,
@@ -49,13 +50,14 @@ class BaseIntegrationService:
                         url=url,
                         headers=req_headers,
                         json=json,
+                        content=content,
                         params=params,
                     )
 
                 if resp.status_code == 401:
                     raise FlowifyException(
                         ErrorCode.OAUTH_TOKEN_INVALID,
-                        detail=f"OAuth 토큰이 만료되었거나 유효하지 않습니다.",
+                        detail="OAuth 토큰이 만료되었거나 유효하지 않습니다.",
                         context={"url": url, "status": 401},
                     )
 
