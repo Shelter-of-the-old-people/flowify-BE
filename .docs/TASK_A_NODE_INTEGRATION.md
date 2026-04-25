@@ -1,45 +1,45 @@
-﻿# ?묒뾽??A ???몃뱶 ?듯빀 & ?쒕퉬???곕룞
+# 작업 A: 노드 통합 & 서비스 연동
 
-> ?묒꽦?? 2026-04-17 | **v2 ?낅뜲?댄듃: 2026-04-23** | 以묎컙 諛쒗몴: 2026-04-29 | 理쒖쥌 ?쒖텧: 2026-06-17
+> 작성일: 2026-04-17 | **v2 업데이트: 2026-04-23** | 중간 발표: 2026-04-29 | 최종 제출: 2026-06-17
 
 ---
 
-## v2 ?고???而⑦듃?숉듃 蹂寃??붿빟
+## v2 최종 컨트랙트 변경 요약
 
-> **?듭떖**: v2 ?댁쟾??`config["source"]` / `config["target"]` 湲곕컲 ?쇱슦?낆씠 **`runtime_source` / `runtime_sink` 湲곕컲**?쇰줈 ?꾨㈃ 援먯껜?섏뿀?듬땲?? ?꾨옒 ???쒖떆????ぉ? ?대? 援ы쁽 ?꾨즺?섏뿀?쇰ŉ, ?묒뾽??A???⑥? ??ぉ??吏묒쨷?섎㈃ ?⑸땲??
+> **핵심**: v2 이전의 `config["source"]` / `config["target"]` 기반 플로우는 **`runtime_source` / `runtime_sink` 기반**으로 전면 교체되었습니다. 아래에 표시된 항목은 이미 구현 완료되었으며, 작업 A에서는 남은 항목에 집중하면 됩니다.
 
-### ?щ씪吏??듭떖 ?ы빆
+### 달라진 핵심 사항
 
-| ??ぉ | v1 (?댁쟾) | v2 (?꾩옱) |
+| 항목 | v1 (이전) | v2 (현재) |
 |------|-----------|-----------|
-| ?몃뱶 ?쒓렇?덉쿂 | `execute(input_data: dict)` | `execute(node, input_data, service_tokens)` |
-| ?좏겙 ?묎렐 | `input_data["credentials"]` | `service_tokens` ?뚮씪誘명꽣 (蹂꾨룄 ?꾨떖) |
-| ?낅젰 ?쇱슦??| `config["source"]` | `node["runtime_source"]["service"]` + `mode` |
-| 異쒕젰 ?쇱슦??| `config["target"]` | `node["runtime_sink"]["service"]` + `config` |
-| 諛섑솚媛??뺤떇 | ?꾩쓽 dict ?꾩쟻 | **Canonical Payload** (`type` ?꾨뱶 ?꾩닔) |
-| ?⑺넗由?| `factory.create(type, config)` | `factory.create_from_node_def(node_def)` |
-| validate ?쒓렇?덉쿂 | `validate() -> bool` | `validate(node: dict) -> bool` |
+| 노드 시그니처 | `execute(input_data: dict)` | `execute(node, input_data, service_tokens)` |
+| 토큰 접근 | `input_data["credentials"]` | `service_tokens` 파라미터 (별도 전달) |
+| 입력 라우팅 | `config["source"]` | `node["runtime_source"]["service"]` + `mode` |
+| 출력 라우팅 | `config["target"]` | `node["runtime_sink"]["service"]` + `config` |
+| 반환값 형식 | 임의 dict 누적 | **Canonical Payload** (`type` 필드 필수) |
+| 팩토리 | `factory.create(type, config)` | `factory.create_from_node_def(node_def)` |
+| validate 시그니처 | `validate() -> bool` | `validate(node: dict) -> bool` |
 
 ---
 
-## ?대떦 ?뚯씪
+## 해당 파일
 
-| ?뚯씪 | ?곹깭 |
+| 파일 | 상태 |
 |------|------|
-| `app/core/nodes/input_node.py` | ??**?꾨즺** ??runtime_source 湲곕컲 ?쇱슦??(4 ?쒕퉬?? 15 紐⑤뱶) |
-| `app/core/nodes/output_node.py` | ??**?꾨즺** ??runtime_sink 湲곕컲 ?쇱슦??(6 ?쒕퉬?? |
-| `app/core/nodes/factory.py` | ??**?꾨즺** ??FlowifyException + create_from_node_def |
-| `app/services/integrations/rest_api.py` | ?맀 ?ъ떆??濡쒖쭅 ?고쉶 踰꾧렇 |
-| `tests/test_input_node.py` | ???묒꽦 ?꾨즺 ??v2 source contract + attachment_email |
-| `tests/test_output_node.py` | ???묒꽦 ?꾨즺 ??v2 sink contract + draft/update/Drive branches |
+| `app/core/nodes/input_node.py` | **완료**: runtime_source 기반 라우팅 (4 서비스, 15 모드) |
+| `app/core/nodes/output_node.py` | **완료**: runtime_sink 기반 라우팅 (6 서비스) |
+| `app/core/nodes/factory.py` | **완료**: FlowifyException + create_from_node_def |
+| `app/services/integrations/rest_api.py` | **완료**: 재시도 로직 우회 버그 수정 |
+| `tests/test_input_node.py` | **작성 완료**: v2 source contract + attachment_email |
+| `tests/test_output_node.py` | **작성 완료**: v2 sink contract + draft/update/Drive branches |
 
 ---
 
-## ??A-1. [?꾨즺] InputNodeStrategy ???쒕퉬???곌껐
+## A-1. [완료] InputNodeStrategy 서비스 연결
 
-**v2 而⑦듃?숉듃濡??꾨㈃ ?ъ옉???꾨즺.** ?묒뾽??A?????뚯씪???섏젙???꾩슂 ?놁씠, ?숈옉???댄빐?섍퀬 ?뚯뒪?몃? ?묒꽦?섎㈃ ?⑸땲??
+**v2 컨트랙트로 전면 재작업 완료.** 작업 A에서는 파일 수정 없이, 동작을 이해하고 테스트를 작성하면 됩니다.
 
-### ?꾩옱 援ы쁽 援ъ“ (`app/core/nodes/input_node.py`)
+### 현재 구현 구조 (`app/core/nodes/input_node.py`)
 
 ```python
 async def execute(
@@ -50,14 +50,14 @@ async def execute(
 ) -> dict[str, Any]:
     runtime_source = node.get("runtime_source")
     service = runtime_source["service"]  # "google_drive", "gmail", "google_sheets", "slack"
-    mode = runtime_source["mode"]        # "single_file", "new_email", "sheet_all" ??
+    mode = runtime_source["mode"]        # "single_file", "new_email", "sheet_all" 등
     target = runtime_source.get("target", "")
     token = service_tokens.get(service, "")
 ```
 
-### 吏???쒕퉬??& 紐⑤뱶 (Phase 1)
+### 지원 서비스 & 모드 (Phase 1)
 
-| ?쒕퉬??| 紐⑤뱶 | 諛섑솚 Canonical Type |
+| 서비스 | 모드 | 반환 Canonical Type |
 |--------|------|-------------------|
 | `google_drive` | single_file, file_changed, new_file, folder_new_file | SINGLE_FILE |
 | `google_drive` | folder_all_files | FILE_LIST |
@@ -67,19 +67,19 @@ async def execute(
 | `google_sheets` | sheet_all, new_row, row_updated | SPREADSHEET_DATA |
 | `slack` | channel_messages | TEXT |
 
-### ?좑툘 ?묒뾽??A 李멸퀬: 湲곗〈 臾몄꽌? ?щ씪吏???
+### 작업 A 참고: 기존 문서와 달라진 점
 
-- `credentials.get(source)` ??**?ъ슜?섏? ?딆쓬**. `service_tokens.get(service)`濡?吏곸젒 ?묎렐
-- `config["source"]` ??**?ъ슜?섏? ?딆쓬**. `node["runtime_source"]`?먯꽌 `service`, `mode`, `target` 異붿텧
-- 諛섑솚媛믪씠 `{**input_data, "source": ..., "raw_data": ...}` ?뺥깭媛 ?꾨땶 **Canonical Payload** (`{"type": "SINGLE_FILE", "filename": ..., "content": ...}`)
+- `credentials.get(source)`는 **사용하지 않음**. `service_tokens.get(service)`로 직접 접근
+- `config["source"]`는 **사용하지 않음**. `node["runtime_source"]`에서 `service`, `mode`, `target` 추출
+- 반환값이 `{**input_data, "source": ..., "raw_data": ...}` 형태가 아닌 **Canonical Payload** (`{"type": "SINGLE_FILE", "filename": ..., "content": ...}`)
 
 ---
 
-## ??A-2. [?꾨즺] OutputNodeStrategy ???쒕퉬???곌껐
+## A-2. [완료] OutputNodeStrategy 서비스 연결
 
-**v2 而⑦듃?숉듃濡??꾨㈃ ?ъ옉???꾨즺.**
+**v2 컨트랙트로 전면 재작업 완료.**
 
-### ?꾩옱 援ы쁽 援ъ“ (`app/core/nodes/output_node.py`)
+### 현재 구현 구조 (`app/core/nodes/output_node.py`)
 
 ```python
 async def execute(
@@ -94,9 +94,9 @@ async def execute(
     token = service_tokens.get(service, "")
 ```
 
-### 吏???쒕퉬??& ?낅젰 ????명솚
+### 지원 서비스 & 입력 타입 호환
 
-| ?쒕퉬??| ?덉슜 ?낅젰 ???| ?꾩닔 config |
+| 서비스 | 허용 입력 타입 | 필수 config |
 |--------|-------------|------------|
 | `slack` | TEXT | channel |
 | `gmail` | TEXT, SINGLE_FILE, FILE_LIST | to, subject, action |
@@ -107,32 +107,33 @@ async def execute(
 
 ---
 
-## A-3. [?윞 High] rest_api.py ???ъ떆??濡쒖쭅 ?고쉶 ?섏젙
+## A-3. [High] rest_api.py 재시도 로직 우회 수정
 
-### ?꾩옱 踰꾧렇 (`app/services/integrations/rest_api.py`)
+### 기존 버그 (`app/services/integrations/rest_api.py`)
 
 ```python
 async def call(self, method, url, ..., token: str = "") -> dict:
     if token:
-        return await self._request(method, url, token, ...)  # ?ъ떆??O
+        return await self._request(method, url, token, ...)  # 재시도 O
 
-    # ?좑툘 ?좏겙 ?녿뒗 怨듦컻 API ??BaseIntegrationService._request() 誘몄궗??
+    # 토큰 없는 공개 API는 BaseIntegrationService._request() 미사용
     async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.request(...)  # ?ъ떆???놁쓬, ?먮윭 ?섑븨 ?놁쓬
+        resp = await client.request(...)  # 재시도 없음, 에러 회피 없음
 ```
 
-### ?섏젙 諛⑺뼢
+### 수정 방향
 
 ```python
 async def call(self, method, url, ..., token: str = "") -> dict:
-    # token ?좊Т? 愿怨꾩뾾??_request() ?ъ슜 (?ъ떆??濡쒖쭅 ?듭씪)
+    # token 유무와 관계없이 _request() 사용 (재시도 로직 통일)
     return await self._request(
         method, url, token,
         params=params, json=body, headers=headers, timeout=timeout
     )
 ```
 
-`base.py`?먯꽌 鍮??좏겙 泥섎━:
+`base.py`에서 빈 토큰 처리:
+
 ```python
 if token:
     headers["Authorization"] = f"Bearer {token}"
@@ -140,17 +141,17 @@ if token:
 
 ---
 
-## ??A-4. [?꾨즺] NodeFactory ??ValueError ??FlowifyException 蹂寃?
+## A-4. [완료] NodeFactory ValueError -> FlowifyException 변경
 
-`factory.py`?먯꽌 `FlowifyException`?쇰줈 蹂寃??꾨즺. 異붽?濡?`create_from_node_def()` 硫붿꽌?쒓? 異붽???
+`factory.py`에서 `FlowifyException`으로 변경 완료. 추가로 `create_from_node_def()` 메서드가 추가됨.
 
 ---
 
-## A-5. [?윝 Medium] ?뚯뒪???묒꽦
+## A-5. [Medium] 테스트 작성
 
-> **以묒슂**: v2 ?쒓렇?덉쿂 湲곗??쇰줈 ?묒꽦?댁빞 ?⑸땲?? 湲곗〈 臾몄꽌???뚯뒪??肄붾뱶??**?ъ슜 遺덇?** ???꾨옒 ?덉떆瑜?李멸퀬?섏꽭??
+> **중요**: v2 시그니처 기준으로 작성해야 합니다. 기존 문서의 테스트 코드는 **사용 불가**이므로 아래 예시를 참고하세요.
 
-### `tests/test_input_node.py` (?좉퇋)
+### `tests/test_input_node.py` (신규)
 
 ```python
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -220,7 +221,7 @@ def test_validate():
     assert node.validate({}) is False
 ```
 
-### `tests/test_output_node.py` (?좉퇋)
+### `tests/test_output_node.py` (신규)
 
 ```python
 from unittest.mock import AsyncMock, patch
@@ -280,11 +281,12 @@ def test_validate():
 
 ---
 
-## ?좎옱???ㅻ쪟 & 二쇱쓽?ы빆
+## 현재 오류 & 주의사항
 
-### 1. service_tokens ??援ъ“ (?뺤젙??
+### 1. service_tokens 맵 구조 (확정)
 
-v2 而⑦듃?숉듃?먯꽌 `service_tokens`??**?쒕퉬????낆쓣 ??*濡??ъ슜:
+v2 컨트랙트에서 `service_tokens`는 **서비스 타입을 키로 사용**:
+
 ```json
 {
   "google_drive": "ya29.xxx",
@@ -293,32 +295,36 @@ v2 而⑦듃?숉듃?먯꽌 `service_tokens`??**?쒕퉬????낆쓣 ??*濡??ъ슜
   "notion": "ntn_xxx"
 }
 ```
-Spring Boot `WorkflowTranslator`媛 ?쒕퉬????낅퀎濡?蹂듯샇?뷀븯???꾨떖. ?ㅻ뒗 `runtime_source.service` / `runtime_sink.service` 媛믨낵 ?쇱튂.
 
-### 2. GoogleDriveService.download_file() 諛붿씠?덈━ 踰꾧렇
+Spring Boot `WorkflowTranslator`가 서비스 타입별로 복호화하여 전달합니다. 이는 `runtime_source.service` / `runtime_sink.service` 값과 일치합니다.
 
-`download_file()`?먯꽌 `alt=media`濡?諛붿씠?덈━ ?뚯씪 ?ㅼ슫濡쒕뱶 ??`_request()`媛 `.json()`?쇰줈 ?뚯떛???쒕룄???ㅽ뙣?????덉쓬. Input ?몃뱶?먯꽌 ?뚯씪 ?ㅼ슫濡쒕뱶媛 ?꾩슂?섎떎硫???硫붿꽌?쒕룄 ?④퍡 ?섏젙 ?꾩슂.
+### 2. GoogleDriveService.download_file() 바이너리 버그
 
-### 3. ?쒕퉬???몄뒪?댁뒪 ?앹꽦 鍮꾩슜
+`download_file()`에서 `alt=media`로 바이너리 파일을 다운로드할 때 `_request()`가 `.json()`으로 파싱을 시도하면 실패할 수 있습니다. Input 노드에서 파일 다운로드가 필요하다면 이 메서드도 함께 수정 필요합니다.
 
-留?`execute()` ?몄텧留덈떎 ?쒕퉬???몄뒪?댁뒪瑜??덈줈 ?앹꽦?? ?깅뒫??臾몄젣媛 ?섎㈃ ?몃뱶 ?대옒???섏??먯꽌 ?깃???愿由?怨좊젮.
+### 3. 서비스 인스턴스 생성 비용
+
+매 `execute()` 호출마다 서비스 인스턴스를 새로 생성합니다. 성능 문제가 생기면 노드 클래스 수준에서 캐싱 관리하는 방안을 고려합니다.
 
 ---
 
-## ?묒뾽 泥댄겕由ъ뒪??
+## 작업 체크리스트
 
-**以묎컙 諛쒗몴 (4/29) ??**
-- [x] `input_node.py` ?쒕퉬???곌껐 援ы쁽 ??v2 ?꾨즺
-- [x] `output_node.py` ?쒕퉬???곌껐 援ы쁽 ??v2 ?꾨즺
-- [x] `factory.py` ValueError ??FlowifyException ??v2 ?꾨즺
-- [x] Spring Boot `service_tokens` ??援ъ“ ?뺤씤 ??v2 而⑦듃?숉듃?먯꽌 ?뺤젙
+**중간 발표 (4/29)**
 
-**理쒖쥌 ?쒖텧 (6/17) ??**
+- [x] `input_node.py` 서비스 연결 구현: v2 완료
+- [x] `output_node.py` 서비스 연결 구현: v2 완료
+- [x] `factory.py` ValueError -> FlowifyException: v2 완료
+- [x] Spring Boot `service_tokens` 맵 구조 확인: v2 컨트랙트에서 확정
+
+**최종 제출 (6/17)**
+
 - [x] `rest_api.py` retry path fixed before this Task A alignment.
 - [x] `tests/test_input_node.py` covers v2 source contract, including Gmail attachment_email.
 - [x] `tests/test_output_node.py` covers v2 sink contract, including draft/update/Drive branches.
 
 **2026-04-25 Task A alignment update**
+
 - [x] Gmail `attachment_email` returns FILE_LIST attachment metadata.
 - [x] Gmail sink `action=draft` calls the Gmail draft API.
 - [x] Google Calendar sink branches `action=create/update`.
