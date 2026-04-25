@@ -37,10 +37,12 @@ class SchedulerService:
         }
 
     def start(self) -> None:
+        """스케줄러가 아직 중지 상태일 때만 시작합니다."""
         if not self._scheduler.running:
             self._scheduler.start()
 
     def shutdown(self) -> None:
+        """스케줄러가 실행 중일 때만 종료합니다."""
         if self._scheduler.running:
             self._scheduler.shutdown()
 
@@ -62,6 +64,7 @@ class SchedulerService:
         self._scheduler.add_job(func, "interval", id=job_id, seconds=seconds, **kwargs)
 
     def remove_job(self, job_id: str) -> None:
+        """지정한 ID의 스케줄 작업을 삭제합니다."""
         self._scheduler.remove_job(job_id)
 
     def get_jobs(self) -> list[dict[str, str | None]]:

@@ -32,11 +32,12 @@
 | `app/core/nodes/logic_node.py` | ✅ **완료** — v2 시그니처 + canonical payload 기반 Loop/IfElse |
 | `app/core/nodes/factory.py` | ✅ **완료** — create_from_node_def + infer_runtime_type |
 | `app/services/scheduler_service.py` | ✅ **완료** — MongoDB jobstore 설정 추가 |
-| `app/api/v1/endpoints/trigger.py` | ✅ **완료** — 스케줄러 API CRUD 구현 |
+| `app/api/v1/endpoints/trigger.py` | ✅ **완료** — 스케줄러 API CRUD + scheduled workflow execution 연결 |
 | `app/api/v1/router.py` | ✅ **완료** — trigger 라우터 등록 |
 | `app/main.py` | ✅ **완료** — SchedulerService 초기화 |
 | `tests/test_loop_node.py` | ✅ **완료** — v2 시그니처 기준 테스트 작성 |
 | `tests/test_scheduler.py` | ✅ **완료** — SchedulerService 테스트 작성 |
+| `tests/test_trigger_api.py` | ✅ **완료** — Trigger API 및 scheduled workflow helper 테스트 작성 |
 
 ---
 
@@ -74,11 +75,11 @@ v2에서 canonical payload 기반으로 재작성:
 
 ## ✅ B-4. [완료] 스케줄러 API — `trigger.py`
 
-**v2 구현 시 함께 완료됨.** `app/api/v1/endpoints/trigger.py` (111줄, full CRUD: POST/GET/DELETE).
+**구현 완료.** `app/api/v1/endpoints/trigger.py`에서 `GET/POST/DELETE /api/v1/triggers`를 제공합니다.
 
 ### 참고: 현재 구현 구조
 
-### 구현할 엔드포인트
+### 구현된 엔드포인트
 
 ```
 POST   /api/v1/triggers              → 스케줄 등록
@@ -86,33 +87,70 @@ GET    /api/v1/triggers              → 등록된 스케줄 목록 조회
 DELETE /api/v1/triggers/{trigger_id} → 스케줄 삭제
 ```
 
-### `app/api/v1/endpoints/trigger.py` 생성
+### 현재 구현 스냅샷 (`app/api/v1/endpoints/trigger.py`)
 
 ```python
+from typing import Any
+
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
+
 from app.api.v1.deps import get_user_id
+from app.common.errors import ErrorCode, FlowifyException
+from app.core.engine.executor import WorkflowExecutor, register_cancellation_event
+from app.db.mongodb import get_database
+from app.models.workflow import WorkflowDefinition
 from app.services.scheduler_service import SchedulerService
 
 router = APIRouter()
 
 
 class TriggerCreateRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+
     workflow_id: str
-    trigger_type: str           # "cron" | "interval"
-    config: dict = {}           # {"hour": 9, "minute": 0} 또는 {"seconds": 3600}
+    user_id: str | None = None
+    trigger_type: str = "cron"
+    config: dict[str, Any] = Field(default_factory=dict)
+    workflow_definition: WorkflowDefinition
+    service_tokens: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_fields(cls, data):
+        if "trigger_type" not in data and "type" in data:
+            data["trigger_type"] = data["type"]
+        if "service_tokens" not in data and "credentials" in data:
+            data["service_tokens"] = data["credentials"]
+        return data
 
 
 class TriggerResponse(BaseModel):
     trigger_id: str
     workflow_id: str
     trigger_type: str
-    config: dict
-    status: str
+    next_run: str | None = None
 
 
-def get_scheduler(request: Request) -> SchedulerService:
-    return request.app.state.scheduler
+async def _run_scheduled_workflow(
+    workflow_id: str,
+    workflow_definition: dict[str, Any],
+    service_tokens: dict[str, str],
+    user_id: str,
+) -> None:
+    workflow_def = WorkflowDefinition.model_validate(workflow_definition)
+    execution_id = WorkflowExecutor.generate_execution_id()
+    register_cancellation_event(execution_id)
+
+    executor = WorkflowExecutor(get_database())
+    await executor.execute(
+        execution_id=execution_id,
+        workflow_id=workflow_id,
+        user_id=user_id,
+        nodes=workflow_def.nodes,
+        edges=workflow_def.edges,
+        service_tokens=service_tokens,
+    )
 
 
 @router.post("", response_model=TriggerResponse)
@@ -121,64 +159,51 @@ async def create_trigger(
     request: Request,
     user_id: str = Depends(get_user_id),
 ):
-    scheduler = get_scheduler(request)
-    trigger_id = f"trigger_{user_id}_{body.workflow_id}"
+    scheduler = request.app.state.scheduler
+    trigger_id = f"trigger_{body.workflow_id}"
+    job_kwargs = {
+        "workflow_id": body.workflow_id,
+        "workflow_definition": body.workflow_definition.model_dump(by_alias=False),
+        "service_tokens": body.service_tokens,
+        "user_id": user_id,
+    }
 
-    if body.trigger_type == "cron":
-        scheduler.add_cron_job(
-            job_id=trigger_id,
-            func=lambda: None,  # TODO: 실제 워크플로우 실행 함수로 교체
-            hour=body.config.get("hour", 0),
-            minute=body.config.get("minute", 0),
-        )
-    elif body.trigger_type == "interval":
-        scheduler.add_interval_job(
-            job_id=trigger_id,
-            func=lambda: None,  # TODO: 실제 워크플로우 실행 함수로 교체
-            seconds=body.config.get("seconds", 3600),
-        )
-
-    return TriggerResponse(
-        trigger_id=trigger_id,
-        workflow_id=body.workflow_id,
-        trigger_type=body.trigger_type,
-        config=body.config,
-        status="active",
+    scheduler.add_cron_job(
+        job_id=trigger_id,
+        func=_run_scheduled_workflow,
+        hour=body.config.get("hour", 0),
+        minute=body.config.get("minute", 0),
+        kwargs=job_kwargs,
+        replace_existing=True,
     )
-
-
-@router.delete("/{trigger_id}")
-async def delete_trigger(
-    trigger_id: str,
-    request: Request,
-    user_id: str = Depends(get_user_id),
-):
-    scheduler = get_scheduler(request)
-    scheduler.remove_job(trigger_id)
-    return {"trigger_id": trigger_id, "status": "deleted"}
 ```
 
-### APScheduler MongoDB Jobstore 설정
+현재 구현은 스케줄 CRUD, MongoDB 영속화, 실제 워크플로우 실행 helper 연결까지 완료된 상태입니다. `lambda` placeholder 대신 top-level async 함수 `_run_scheduled_workflow()`를 등록해서 APScheduler jobstore 직렬화와 재시작 복원을 모두 만족하도록 맞췄습니다.
 
-현재 `SchedulerService`는 메모리에만 저장 → 프로세스 재시작 시 스케줄 손실.
+### 현재 MongoDB Jobstore 설정
+
+현재 `SchedulerService`는 MongoDB `scheduler_jobs` 컬렉션을 기본 jobstore로 사용합니다.
 
 ```python
+from apscheduler.jobstores.mongodb import MongoDBJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from app.config import settings
+
+DEFAULT_JOBSTORE_COLLECTION = "scheduler_jobs"
 
 class SchedulerService:
-    def __init__(self, mongodb_url: str = None):
-        jobstores = {}
-        if mongodb_url:
-            try:
-                from apscheduler.jobstores.mongodb import MongoDBJobStore
-                jobstores["default"] = MongoDBJobStore(
-                    database="flowify",
-                    collection="scheduled_jobs",
-                    host=mongodb_url,
-                )
-            except ImportError:
-                pass
-        self._scheduler = AsyncIOScheduler(jobstores=jobstores or None)
+    def __init__(self):
+        self._scheduler = AsyncIOScheduler(jobstores=self._build_jobstores())
+
+    @staticmethod
+    def _build_jobstores() -> dict[str, MongoDBJobStore]:
+        return {
+            "default": MongoDBJobStore(
+                host=settings.MONGODB_URL,
+                database=settings.MONGODB_DB_NAME,
+                collection=DEFAULT_JOBSTORE_COLLECTION,
+            )
+        }
 ```
 
 ---
@@ -204,7 +229,7 @@ if doc.get("state") == WorkflowState.SUCCESS.value:
 
 ## ✅ B-7. [완료] 테스트 작성
 
-> **중요**: v2 시그니처 기준으로 테스트 작성 완료. 로컬 `pytest tests/test_loop_node.py tests/test_scheduler.py -v` 기준 **12개 테스트 통과**를 확인했습니다.
+> **중요**: v2 시그니처 기준으로 테스트 작성 완료. 로컬 `pytest tests/test_trigger_api.py tests/test_loop_node.py tests/test_scheduler.py -q` 기준 **19개 테스트 통과**를 확인했습니다.
 
 ### `tests/test_loop_node.py` (신규)
 
@@ -303,6 +328,46 @@ def test_add_and_remove_cron_job():
     svc.shutdown()
 ```
 
+### `tests/test_trigger_api.py` (신규)
+
+검증 범위:
+- `GET /api/v1/triggers` 목록 조회
+- `POST /api/v1/triggers` cron 등록 시 `_run_scheduled_workflow`가 등록되는지 확인
+- legacy 필드명(`type`, `credentials`) 호환 확인
+- workflow 정의 불일치 시 `INVALID_REQUEST` 반환
+- `DELETE /api/v1/triggers/{trigger_id}` 성공/404 케이스 확인
+- `_run_scheduled_workflow()`가 `WorkflowExecutor.execute()`를 실제 인자 형태로 호출하는지 확인
+
+---
+
+## ✅ B-8. [완료] Spring Boot -> FastAPI `execute` 실연동 검증
+
+> **검증일**: 2026-04-26
+
+실제 로컬 연동은 `flowify-FE` Docker 스택의 Spring 컨테이너를 재사용해서 확인했습니다.
+
+- `flowify-fe-spring-boot-1` 컨테이너 기동 확인
+- `flowify-fe-fastapi-1`는 중지하고, **현재 작업 브랜치 FastAPI 코드**를 로컬 `8000` 포트에 직접 실행
+- Spring 컨테이너가 `FASTAPI_URL=http://host.docker.internal:8000` 경로로 현재 로컬 FastAPI를 호출하도록 유지
+- 테스트용 `user/workflow`를 Spring MongoDB에 삽입한 뒤 `POST /api/workflows/{id}/execute` 실제 호출
+
+### 검증 결과
+
+- Spring 응답에서 `execution_id` 정상 수신
+- 로컬 FastAPI `workflow_executions` 컬렉션에 실행 문서 생성 확인
+- 실행 상태 `success` 확인
+- node log 1건 생성 확인
+
+### 범위 주의
+
+- **검증 완료 범위**: Spring Boot -> FastAPI `execute`
+- **미검증 범위**: Spring Boot -> FastAPI `trigger`
+  현재 Spring 쪽에는 `/api/v1/triggers` 호출 구현이 없어서 `trigger` 실연동은 아직 대상이 아닙니다.
+
+### 테스트 데이터 삽입 시 주의
+
+Spring MongoDB에 workflow 문서를 직접 삽입해 execute를 검증할 때, embedded node 식별자는 `id`가 아니라 `_id`로 넣어야 Spring이 runtime payload에 node id를 정상적으로 실어 보냅니다. 테스트용 direct insert에서 `id`로 넣으면 FastAPI 요청 단계에서 422가 날 수 있습니다.
+
 ---
 
 ## 잠재적 오류 & 주의사항
@@ -344,3 +409,6 @@ def test_add_and_remove_cron_job():
 - [x] APScheduler MongoDB jobstore 설정 ✅ 구현 완료
 - [x] `tests/test_loop_node.py` 작성 (v2 시그니처 기준) ✅ 작성 완료 및 통과
 - [x] `tests/test_scheduler.py` 작성 ✅ 작성 완료 및 통과
+- [x] `trigger.py` 실제 scheduled workflow execution 연결 ✅ 구현 완료
+- [x] `tests/test_trigger_api.py` 작성 ✅ 작성 완료 및 통과
+- [x] FE Docker Spring 기준 `execute` 실연동 검증 완료 (2026-04-26)
