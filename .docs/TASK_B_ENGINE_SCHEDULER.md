@@ -31,12 +31,12 @@
 | `app/core/engine/executor.py` | ✅ **완료** — v2 전면 재작성 (canonical payload, runtime_type, branch_map, stop 보호) |
 | `app/core/nodes/logic_node.py` | ✅ **완료** — v2 시그니처 + canonical payload 기반 Loop/IfElse |
 | `app/core/nodes/factory.py` | ✅ **완료** — create_from_node_def + infer_runtime_type |
-| `app/services/scheduler_service.py` | ⚠️ jobstore 없음 (in-memory 휘발성) |
-| `app/api/v1/endpoints/trigger.py` | ❌ 없음 — 신규 생성 |
-| `app/api/v1/router.py` | ⚠️ trigger 라우터 미등록 |
-| `app/main.py` | ⚠️ SchedulerService 초기화 누락 |
-| `tests/test_loop_node.py` | ❌ 없음 — 신규 작성 (v2 시그니처 기준) |
-| `tests/test_scheduler.py` | ❌ 없음 — 신규 작성 |
+| `app/services/scheduler_service.py` | ✅ **완료** — MongoDB jobstore 설정 추가 |
+| `app/api/v1/endpoints/trigger.py` | ✅ **완료** — 스케줄러 API CRUD 구현 |
+| `app/api/v1/router.py` | ✅ **완료** — trigger 라우터 등록 |
+| `app/main.py` | ✅ **완료** — SchedulerService 초기화 |
+| `tests/test_loop_node.py` | ✅ **완료** — v2 시그니처 기준 테스트 작성 |
+| `tests/test_scheduler.py` | ✅ **완료** — SchedulerService 테스트 작성 |
 
 ---
 
@@ -202,9 +202,9 @@ if doc.get("state") == WorkflowState.SUCCESS.value:
 
 ---
 
-## B-7. [🟠 Medium] 테스트 작성
+## ✅ B-7. [완료] 테스트 작성
 
-> **중요**: v2 시그니처 기준으로 작성해야 합니다.
+> **중요**: v2 시그니처 기준으로 테스트 작성 완료. 로컬 `pytest tests/test_loop_node.py tests/test_scheduler.py -v` 기준 **12개 테스트 통과**를 확인했습니다.
 
 ### `tests/test_loop_node.py` (신규)
 
@@ -341,6 +341,6 @@ def test_add_and_remove_cron_job():
 
 **최종 제출 (6/17) 전:**
 - [x] Stop 엔드포인트 race condition 수정 ✅ v2 완료
-- [ ] APScheduler MongoDB jobstore 설정
-- [ ] `tests/test_loop_node.py` 작성 (v2 시그니처 기준) — 스켈레톤 생성됨
-- [ ] `tests/test_scheduler.py` 작성 — 스켈레톤 생성됨
+- [x] APScheduler MongoDB jobstore 설정 ✅ 구현 완료
+- [x] `tests/test_loop_node.py` 작성 (v2 시그니처 기준) ✅ 작성 완료 및 통과
+- [x] `tests/test_scheduler.py` 작성 ✅ 작성 완료 및 통과
