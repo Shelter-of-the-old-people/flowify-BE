@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -23,7 +23,9 @@ class TestBaseIntegrationService:
         resp = _mock_response(200, {"ok": True})
 
         with patch("httpx.AsyncClient.request", new_callable=AsyncMock, return_value=resp):
-            result = await BaseIntegrationService._request("GET", "https://api.test.com", "token123")
+            result = await BaseIntegrationService._request(
+                "GET", "https://api.test.com", "token123"
+            )
             assert result == {"ok": True}
 
     @pytest.mark.asyncio
@@ -39,11 +41,13 @@ class TestBaseIntegrationService:
     async def test_5xx_retries_then_raises(self):
         resp = _mock_response(503)
 
-        with patch("httpx.AsyncClient.request", new_callable=AsyncMock, return_value=resp):
-            with patch("asyncio.sleep", new_callable=AsyncMock):
-                with pytest.raises(FlowifyException) as exc_info:
-                    await BaseIntegrationService._request("GET", "https://api.test.com", "token")
-                assert exc_info.value.error_code == ErrorCode.EXTERNAL_API_ERROR
+        with (
+            patch("httpx.AsyncClient.request", new_callable=AsyncMock, return_value=resp),
+            patch("asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(FlowifyException) as exc_info,
+        ):
+            await BaseIntegrationService._request("GET", "https://api.test.com", "token")
+        assert exc_info.value.error_code == ErrorCode.EXTERNAL_API_ERROR
 
     @pytest.mark.asyncio
     async def test_4xx_does_not_retry(self):
@@ -55,19 +59,23 @@ class TestBaseIntegrationService:
             call_count += 1
             return resp
 
-        with patch("httpx.AsyncClient.request", side_effect=counting_request):
-            with pytest.raises(FlowifyException):
-                await BaseIntegrationService._request("GET", "https://api.test.com", "token")
+        with (
+            patch("httpx.AsyncClient.request", side_effect=counting_request),
+            pytest.raises(FlowifyException),
+        ):
+            await BaseIntegrationService._request("GET", "https://api.test.com", "token")
         assert call_count == 1  # 재시도 없음
 
     @pytest.mark.asyncio
     async def test_connect_error_retries(self):
-        with patch(
-            "httpx.AsyncClient.request",
-            new_callable=AsyncMock,
-            side_effect=httpx.ConnectError("Connection refused"),
+        with (
+            patch(
+                "httpx.AsyncClient.request",
+                new_callable=AsyncMock,
+                side_effect=httpx.ConnectError("Connection refused"),
+            ),
+            patch("asyncio.sleep", new_callable=AsyncMock),
         ):
-            with patch("asyncio.sleep", new_callable=AsyncMock):
-                with pytest.raises(FlowifyException) as exc_info:
-                    await BaseIntegrationService._request("GET", "https://api.test.com", "token")
-                assert exc_info.value.error_code == ErrorCode.EXTERNAL_API_ERROR
+            with pytest.raises(FlowifyException) as exc_info:
+                await BaseIntegrationService._request("GET", "https://api.test.com", "token")
+            assert exc_info.value.error_code == ErrorCode.EXTERNAL_API_ERROR

@@ -1,11 +1,10 @@
 import asyncio
-import copy
-import time
-import traceback
-import uuid
 from collections import defaultdict, deque
+import copy
 from datetime import datetime
+import traceback
 from typing import Any
+import uuid
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -159,7 +158,9 @@ class WorkflowExecutor:
                     state_manager.transition(WorkflowState.FAILED)
                     state_manager.transition(WorkflowState.ROLLBACK_AVAILABLE)
                     execution.state = WorkflowState.ROLLBACK_AVAILABLE
-                    execution.errorMessage = node_log.error.message if node_log.error else "노드 실행 실패"
+                    execution.errorMessage = (
+                        node_log.error.message if node_log.error else "노드 실행 실패"
+                    )
                     execution.finishedAt = datetime.utcnow()
                     await self._save_execution(execution_id, execution)
                     return execution
@@ -170,7 +171,11 @@ class WorkflowExecutor:
                 # IfElse 분기 처리: branch 값에 따라 반대쪽 서브트리 skip
                 runtime_type = getattr(node_def, "runtime_type", None) or node_def.type
                 output_data = node_outputs[node_id]
-                if runtime_type == "if_else" and isinstance(output_data, dict) and "branch" in output_data:
+                if (
+                    runtime_type == "if_else"
+                    and isinstance(output_data, dict)
+                    and "branch" in output_data
+                ):
                     branch_value = output_data["branch"]  # "true" or "false"
                     skip_value = "false" if branch_value == "true" else "true"
                     if node_id in branch_map:
@@ -267,7 +272,9 @@ class WorkflowExecutor:
     async def _save_execution(self, execution_id: str, execution: WorkflowExecution) -> None:
         """실행 상태를 MongoDB에 upsert합니다."""
         doc = execution.model_dump(mode="json")
-        doc["state"] = execution.state.value if hasattr(execution.state, "value") else execution.state
+        doc["state"] = (
+            execution.state.value if hasattr(execution.state, "value") else execution.state
+        )
         doc["_id"] = execution_id
 
         # STOPPED 상태를 SUCCESS로 덮어쓰지 않도록 조건부 upsert
@@ -299,9 +306,7 @@ class WorkflowExecutor:
         return [e.source for e in edges if e.target == node_id]
 
     @staticmethod
-    def _topological_sort(
-        nodes: list[NodeDefinition], edges: list[EdgeDefinition]
-    ) -> list[str]:
+    def _topological_sort(nodes: list[NodeDefinition], edges: list[EdgeDefinition]) -> list[str]:
         """edges 기반 토폴로지 정렬 (Kahn's algorithm)."""
         in_degree: dict[str, int] = {n.id: 0 for n in nodes}
         adj: dict[str, list[str]] = defaultdict(list)
@@ -346,8 +351,7 @@ class WorkflowExecutor:
         첫 번째 edge를 true, 두 번째를 false로 간주합니다.
         """
         if_else_ids = {
-            n.id for n in nodes
-            if (getattr(n, "runtime_type", None) or n.type) == "if_else"
+            n.id for n in nodes if (getattr(n, "runtime_type", None) or n.type) == "if_else"
         }
 
         # label이 ��는 edge 먼저 처리
@@ -359,7 +363,7 @@ class WorkflowExecutor:
         # label 없는 경우: if_else 노드의 outgoing edge 순서로 true/false ��정
         outgoing: dict[str, list[str]] = defaultdict(list)
         for edge in edges:
-            if edge.source in if_else_ids and not (edge.label in ("true", "false")):
+            if edge.source in if_else_ids and edge.label not in ("true", "false"):
                 outgoing[edge.source].append(edge.target)
 
         for source, targets in outgoing.items():

@@ -32,5 +32,5 @@ class TestNotionService:
     async def test_update_page(self, notion):
         with patch.object(notion, "_request", new_callable=AsyncMock) as mock_req:
             mock_req.return_value = {"object": "list", "results": []}
-            result = await notion.update_page("token", "page_1", "Updated content")
+            await notion.update_page("token", "page_1", "Updated content")
             assert mock_req.called

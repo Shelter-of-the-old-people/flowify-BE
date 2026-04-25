@@ -1,9 +1,9 @@
-from enum import Enum
+from enum import StrEnum
 
 from app.common.errors import ErrorCode, FlowifyException
 
 
-class WorkflowState(str, Enum):
+class WorkflowState(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     SUCCESS = "success"

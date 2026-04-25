@@ -79,7 +79,7 @@ async def create_trigger(
         raise FlowifyException(
             ErrorCode.INTERNAL_ERROR,
             detail=f"스케줄 등록에 실패했습니다: {e}",
-        )
+        ) from e
 
     job = scheduler.get_job(trigger_id)
     return TriggerResponse(
@@ -106,5 +106,5 @@ async def delete_trigger(trigger_id: str, request: Request) -> dict:
         raise FlowifyException(
             ErrorCode.INTERNAL_ERROR,
             detail=f"트리거 삭제에 실패했습니다: {e}",
-        )
+        ) from e
     return {"trigger_id": trigger_id, "status": "deleted"}

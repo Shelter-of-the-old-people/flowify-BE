@@ -78,8 +78,10 @@ class BaseIntegrationService:
 
             # 지수 백오프 대기
             if attempt < BaseIntegrationService.MAX_RETRIES - 1:
-                wait = BaseIntegrationService.BASE_BACKOFF * (2 ** attempt)
-                logger.warning(f"외부 API 재시도 {attempt + 1}/{BaseIntegrationService.MAX_RETRIES}: {url} ({wait}s 대기)")
+                wait = BaseIntegrationService.BASE_BACKOFF * (2**attempt)
+                logger.warning(
+                    f"외부 API 재시도 {attempt + 1}/{BaseIntegrationService.MAX_RETRIES}: {url} ({wait}s 대기)"
+                )
                 await asyncio.sleep(wait)
 
         raise FlowifyException(

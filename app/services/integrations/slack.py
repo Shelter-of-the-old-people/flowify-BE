@@ -1,5 +1,3 @@
-import httpx
-
 from app.common.errors import ErrorCode, FlowifyException
 from app.services.integrations.base import BaseIntegrationService
 
@@ -16,7 +14,9 @@ class SlackService(BaseIntegrationService):
     async def send_message(self, token: str, channel: str, text: str) -> dict:
         """Slack 채널에 메시지를 전송합니다."""
         data = await self._request(
-            "POST", f"{SLACK_API}/chat.postMessage", token,
+            "POST",
+            f"{SLACK_API}/chat.postMessage",
+            token,
             json={"channel": channel, "text": text},
         )
         if not data.get("ok"):
@@ -30,7 +30,9 @@ class SlackService(BaseIntegrationService):
     async def list_channels(self, token: str) -> list[dict]:
         """사용자가 접근 가능한 채널 목록을 조회합니다."""
         data = await self._request(
-            "GET", f"{SLACK_API}/conversations.list", token,
+            "GET",
+            f"{SLACK_API}/conversations.list",
+            token,
             params={"types": "public_channel,private_channel", "limit": 200},
         )
         if not data.get("ok"):

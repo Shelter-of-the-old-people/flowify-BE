@@ -30,12 +30,14 @@ class SchedulerService:
         """등록된 모든 스케줄 작업 목록을 반환합니다."""
         jobs = []
         for job in self._scheduler.get_jobs():
-            jobs.append({
-                "id": job.id,
-                "name": job.name,
-                "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
-                "trigger": str(job.trigger),
-            })
+            jobs.append(
+                {
+                    "id": job.id,
+                    "name": job.name,
+                    "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
+                    "trigger": str(job.trigger),
+                }
+            )
         return jobs
 
     def get_job(self, job_id: str) -> dict | None:

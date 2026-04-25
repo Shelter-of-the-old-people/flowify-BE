@@ -19,6 +19,11 @@ class RestAPIService(BaseIntegrationService):
         timeout: float = 30.0,
     ) -> dict:
         return await self._request(
-            method, url, token,
-            json=body, params=params, headers=headers, timeout=timeout,
+            method,
+            url,
+            token,
+            json=body,
+            params=params,
+            headers=headers,
+            timeout=timeout,
         )

@@ -1,5 +1,5 @@
-import pytest
 from pydantic import ValidationError
+import pytest
 
 from app.models.requests import (
     ExecutionResult,
@@ -10,7 +10,7 @@ from app.models.requests import (
     TriggerCreateRequest,
     WorkflowExecuteRequest,
 )
-from app.models.workflow import EdgeDefinition, NodeDefinition, TriggerConfig, WorkflowDefinition
+from app.models.workflow import EdgeDefinition, NodeDefinition, WorkflowDefinition
 
 
 class TestNodeDefinition:
@@ -39,18 +39,20 @@ class TestNodeDefinition:
 
     def test_camel_case_from_spring_boot(self):
         """Spring Boot가 보내는 camelCase JSON 매핑 확인."""
-        node = NodeDefinition.model_validate({
-            "id": "node_abc12345",
-            "category": "service",
-            "type": "gmail",
-            "label": "Gmail 수신",
-            "config": {"action": "read"},
-            "position": {"x": 100.0, "y": 200.0},
-            "dataType": "EMAIL_LIST",
-            "outputDataType": "TEXT",
-            "role": "start",
-            "authWarning": True,
-        })
+        node = NodeDefinition.model_validate(
+            {
+                "id": "node_abc12345",
+                "category": "service",
+                "type": "gmail",
+                "label": "Gmail 수신",
+                "config": {"action": "read"},
+                "position": {"x": 100.0, "y": 200.0},
+                "dataType": "EMAIL_LIST",
+                "outputDataType": "TEXT",
+                "role": "start",
+                "authWarning": True,
+            }
+        )
         assert node.data_type == "EMAIL_LIST"
         assert node.output_data_type == "TEXT"
         assert node.auth_warning is True
@@ -73,21 +75,23 @@ class TestEdgeDefinition:
 class TestWorkflowDefinition:
     def test_camel_case_from_spring_boot(self):
         """Spring Boot Workflow 엔티티 직렬화 결과 매핑 확인."""
-        wf = WorkflowDefinition.model_validate({
-            "id": "wf_abc123",
-            "name": "테스트 워크플로우",
-            "description": "설명",
-            "userId": "usr_abc123",
-            "sharedWith": ["usr_other"],
-            "template": False,
-            "templateId": None,
-            "nodes": [],
-            "edges": [],
-            "trigger": {"type": "manual", "config": {}},
-            "active": True,
-            "createdAt": "2026-04-13T00:00:00Z",
-            "updatedAt": "2026-04-13T00:00:00Z",
-        })
+        wf = WorkflowDefinition.model_validate(
+            {
+                "id": "wf_abc123",
+                "name": "테스트 워크플로우",
+                "description": "설명",
+                "userId": "usr_abc123",
+                "sharedWith": ["usr_other"],
+                "template": False,
+                "templateId": None,
+                "nodes": [],
+                "edges": [],
+                "trigger": {"type": "manual", "config": {}},
+                "active": True,
+                "createdAt": "2026-04-13T00:00:00Z",
+                "updatedAt": "2026-04-13T00:00:00Z",
+            }
+        )
         assert wf.name == "테스트 워크플로우"
         assert wf.user_id == "usr_abc123"
         assert wf.active is True
@@ -98,36 +102,40 @@ class TestWorkflowDefinition:
 class TestWorkflowExecuteRequest:
     def test_valid_spring_boot_format(self):
         """Spring Boot가 전송하는 {workflow, service_tokens} 형식."""
-        req = WorkflowExecuteRequest.model_validate({
-            "workflow": {
-                "id": "wf_1",
-                "name": "테스트",
-                "userId": "usr_1",
-                "nodes": [{"id": "node_1", "type": "gmail", "category": "service"}],
-                "edges": [],
-                "trigger": {"type": "manual", "config": {}},
-                "active": True,
-                "template": False,
-            },
-            "service_tokens": {"gmail": "ya29.access_token"},
-        })
+        req = WorkflowExecuteRequest.model_validate(
+            {
+                "workflow": {
+                    "id": "wf_1",
+                    "name": "테스트",
+                    "userId": "usr_1",
+                    "nodes": [{"id": "node_1", "type": "gmail", "category": "service"}],
+                    "edges": [],
+                    "trigger": {"type": "manual", "config": {}},
+                    "active": True,
+                    "template": False,
+                },
+                "service_tokens": {"gmail": "ya29.access_token"},
+            }
+        )
         assert req.workflow.name == "테스트"
         assert req.service_tokens["gmail"] == "ya29.access_token"
         assert len(req.workflow.nodes) == 1
 
     def test_empty_service_tokens(self):
-        req = WorkflowExecuteRequest.model_validate({
-            "workflow": {
-                "name": "워크플로우",
-                "userId": "usr_1",
-                "nodes": [],
-                "edges": [],
-                "trigger": {"type": "manual", "config": {}},
-                "active": True,
-                "template": False,
-            },
-            "service_tokens": {},
-        })
+        req = WorkflowExecuteRequest.model_validate(
+            {
+                "workflow": {
+                    "name": "워크플로우",
+                    "userId": "usr_1",
+                    "nodes": [],
+                    "edges": [],
+                    "trigger": {"type": "manual", "config": {}},
+                    "active": True,
+                    "template": False,
+                },
+                "service_tokens": {},
+            }
+        )
         assert req.service_tokens == {}
 
     def test_missing_workflow_raises(self):

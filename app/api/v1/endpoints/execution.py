@@ -122,11 +122,13 @@ async def rollback_execution(
     # 상태를 PENDING으로 전환하고 에러 정보 초기화
     await db.workflow_executions.update_one(
         {"_id": execution_id},
-        {"$set": {
-            "state": WorkflowState.PENDING.value,
-            "errorMessage": None,
-            "finishedAt": None,
-        }},
+        {
+            "$set": {
+                "state": WorkflowState.PENDING.value,
+                "errorMessage": None,
+                "finishedAt": None,
+            }
+        },
     )
 
     return RollbackResponse(
@@ -172,10 +174,12 @@ async def stop_execution(
     # MongoDB 직접 업데이트 (safety net — executor가 아직 체크 안 했을 경우 대비)
     await db.workflow_executions.update_one(
         {"_id": execution_id, "state": WorkflowState.RUNNING.value},
-        {"$set": {
-            "state": WorkflowState.STOPPED.value,
-            "errorMessage": "Execution stopped by user request",
-        }},
+        {
+            "$set": {
+                "state": WorkflowState.STOPPED.value,
+                "errorMessage": "Execution stopped by user request",
+            }
+        },
     )
 
     return {"execution_id": execution_id, "status": "stopped"}

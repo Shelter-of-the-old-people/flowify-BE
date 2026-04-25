@@ -1,8 +1,5 @@
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
-
 # v2 테스트 헬퍼: node dict와 canonical payload 사용
 _DEFAULT_NODE = {
     "id": "n1",
@@ -24,8 +21,8 @@ def _node(**overrides):
 
 
 async def test_llm_node_summarize():
-    with patch("app.core.nodes.llm_node.LLMService") as MockService:
-        mock_instance = MockService.return_value
+    with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
+        mock_instance = mock_svc_cls.return_value
         mock_instance.summarize = AsyncMock(return_value="요약 결과")
 
         from app.core.nodes.llm_node import LLMNodeStrategy
@@ -45,8 +42,8 @@ async def test_llm_node_summarize():
 
 
 async def test_llm_node_classify():
-    with patch("app.core.nodes.llm_node.LLMService") as MockService:
-        mock_instance = MockService.return_value
+    with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
+        mock_instance = mock_svc_cls.return_value
         mock_instance.classify = AsyncMock(return_value="긍정")
 
         from app.core.nodes.llm_node import LLMNodeStrategy
@@ -65,8 +62,8 @@ async def test_llm_node_classify():
 
 
 async def test_llm_node_process_default():
-    with patch("app.core.nodes.llm_node.LLMService") as MockService:
-        mock_instance = MockService.return_value
+    with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
+        mock_instance = mock_svc_cls.return_value
         mock_instance.process = AsyncMock(return_value="처리 결과")
 
         from app.core.nodes.llm_node import LLMNodeStrategy
@@ -85,8 +82,8 @@ async def test_llm_node_process_default():
 
 
 async def test_llm_node_default_action_is_process():
-    with patch("app.core.nodes.llm_node.LLMService") as MockService:
-        mock_instance = MockService.return_value
+    with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
+        mock_instance = mock_svc_cls.return_value
         mock_instance.process = AsyncMock(return_value="결과")
 
         from app.core.nodes.llm_node import LLMNodeStrategy
@@ -108,8 +105,8 @@ async def test_llm_node_default_action_is_process():
 
 
 async def test_extract_text_from_single_email():
-    with patch("app.core.nodes.llm_node.LLMService") as MockService:
-        mock_instance = MockService.return_value
+    with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
+        mock_instance = mock_svc_cls.return_value
         mock_instance.summarize = AsyncMock(return_value="요약")
 
         from app.core.nodes.llm_node import LLMNodeStrategy
@@ -129,8 +126,8 @@ async def test_extract_text_from_single_email():
 
 
 async def test_extract_text_from_spreadsheet():
-    with patch("app.core.nodes.llm_node.LLMService") as MockService:
-        mock_instance = MockService.return_value
+    with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
+        mock_instance = mock_svc_cls.return_value
         mock_instance.summarize = AsyncMock(return_value="요약")
 
         from app.core.nodes.llm_node import LLMNodeStrategy
@@ -140,7 +137,11 @@ async def test_extract_text_from_spreadsheet():
 
         await node.execute(
             node=_node(runtime_config={"action": "summarize"}),
-            input_data={"type": "SPREADSHEET_DATA", "headers": ["이름", "점수"], "rows": [["홍길동", "95"]]},
+            input_data={
+                "type": "SPREADSHEET_DATA",
+                "headers": ["이름", "점수"],
+                "rows": [["홍길동", "95"]],
+            },
             service_tokens={},
         )
 
@@ -156,15 +157,24 @@ def test_validate_process_requires_prompt():
         from app.core.nodes.llm_node import LLMNodeStrategy
 
         node_dict = _node()
-        assert LLMNodeStrategy(config={"action": "process", "prompt": "test"}).validate(
-            {**node_dict, "runtime_config": {"action": "process", "prompt": "test"}}
-        ) is True
-        assert LLMNodeStrategy(config={"action": "process"}).validate(
-            {**node_dict, "runtime_config": {"action": "process"}}
-        ) is False
-        assert LLMNodeStrategy(config={"prompt": "test"}).validate(
-            {**node_dict, "runtime_config": {"prompt": "test"}}
-        ) is True
+        assert (
+            LLMNodeStrategy(config={"action": "process", "prompt": "test"}).validate(
+                {**node_dict, "runtime_config": {"action": "process", "prompt": "test"}}
+            )
+            is True
+        )
+        assert (
+            LLMNodeStrategy(config={"action": "process"}).validate(
+                {**node_dict, "runtime_config": {"action": "process"}}
+            )
+            is False
+        )
+        assert (
+            LLMNodeStrategy(config={"prompt": "test"}).validate(
+                {**node_dict, "runtime_config": {"prompt": "test"}}
+            )
+            is True
+        )
         assert LLMNodeStrategy(config={}).validate(node_dict) is False
 
 
@@ -172,18 +182,27 @@ def test_validate_summarize_classify_no_prompt_needed():
     with patch("app.core.nodes.llm_node.LLMService"):
         from app.core.nodes.llm_node import LLMNodeStrategy
 
-        assert LLMNodeStrategy(config={"action": "summarize"}).validate(
-            _node(runtime_config={"action": "summarize"})
-        ) is True
-        assert LLMNodeStrategy(config={"action": "classify"}).validate(
-            _node(runtime_config={"action": "classify"})
-        ) is True
+        assert (
+            LLMNodeStrategy(config={"action": "summarize"}).validate(
+                _node(runtime_config={"action": "summarize"})
+            )
+            is True
+        )
+        assert (
+            LLMNodeStrategy(config={"action": "classify"}).validate(
+                _node(runtime_config={"action": "classify"})
+            )
+            is True
+        )
 
 
 def test_validate_unknown_action():
     with patch("app.core.nodes.llm_node.LLMService"):
         from app.core.nodes.llm_node import LLMNodeStrategy
 
-        assert LLMNodeStrategy(config={"action": "unknown"}).validate(
-            _node(runtime_config={"action": "unknown"})
-        ) is False
+        assert (
+            LLMNodeStrategy(config={"action": "unknown"}).validate(
+                _node(runtime_config={"action": "unknown"})
+            )
+            is False
+        )

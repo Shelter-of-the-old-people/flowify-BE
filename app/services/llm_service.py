@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
@@ -28,35 +27,46 @@ class LLMService:
     async def process(self, prompt: str, context: str | None = None) -> str:
         """범용 프롬프트 처리."""
         if context:
-            template = ChatPromptTemplate.from_messages([
-                ("system", "주어진 컨텍스트를 참고하여 사용자의 요청을 처리하세요."),
-                ("human", "컨텍스트:\n{context}\n\n요청:\n{prompt}"),
-            ])
+            template = ChatPromptTemplate.from_messages(
+                [
+                    ("system", "주어진 컨텍스트를 참고하여 사용자의 요청을 처리하세요."),
+                    ("human", "컨텍스트:\n{context}\n\n요청:\n{prompt}"),
+                ]
+            )
             chain = template | self._llm | StrOutputParser()
             return await self._invoke_with_retry(chain, {"prompt": prompt, "context": context})
         else:
-            template = ChatPromptTemplate.from_messages([
-                ("human", "{prompt}"),
-            ])
+            template = ChatPromptTemplate.from_messages(
+                [
+                    ("human", "{prompt}"),
+                ]
+            )
             chain = template | self._llm | StrOutputParser()
             return await self._invoke_with_retry(chain, {"prompt": prompt})
 
     async def summarize(self, text: str) -> str:
         """텍스트 요약."""
-        template = ChatPromptTemplate.from_messages([
-            ("system", "당신은 문서 요약 전문가입니다. 핵심 내용을 3줄 이내로 요약해주세요."),
-            ("human", "다음 내용을 요약해주세요:\n\n{text}"),
-        ])
+        template = ChatPromptTemplate.from_messages(
+            [
+                ("system", "당신은 문서 요약 전문가입니다. 핵심 내용을 3줄 이내로 요약해주세요."),
+                ("human", "다음 내용을 요약해주세요:\n\n{text}"),
+            ]
+        )
         chain = template | self._llm | StrOutputParser()
         return await self._invoke_with_retry(chain, {"text": text})
 
     async def classify(self, text: str, categories: list[str] | None = None) -> str:
         """텍스트 분류."""
         cats = ", ".join(categories) if categories else "자동 감지"
-        template = ChatPromptTemplate.from_messages([
-            ("system", "당신은 텍스트 분류 전문가입니다. 주어진 카테고리 중 가장 적합한 것을 선택해주세요."),
-            ("human", "다음 내용을 [{categories}] 중 하나로 분류해주세요:\n\n{text}"),
-        ])
+        template = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "당신은 텍스트 분류 전문가입니다. 주어진 카테고리 중 가장 적합한 것을 선택해주세요.",
+                ),
+                ("human", "다음 내용을 [{categories}] 중 하나로 분류해주세요:\n\n{text}"),
+            ]
+        )
         chain = template | self._llm | StrOutputParser()
         return await self._invoke_with_retry(chain, {"text": text, "categories": cats})
 
@@ -70,11 +80,11 @@ class LLMService:
             "당신은 워크플로우 설계 전문가입니다. "
             "사용자의 요구사항을 분석하여 자동화 워크플로우를 설계하세요.\n\n"
             "반드시 다음 JSON 형식으로만 응답하세요 (다른 텍스트 없이 JSON만):\n"
-            '{{\n'
+            "{{\n"
             '  "name": "워크플로우 이름 (필수, 비워두면 안 됨)",\n'
             '  "description": "워크플로우 설명",\n'
             '  "nodes": [\n'
-            '    {{\n'
+            "    {{\n"
             '      "id": "node_abc12345",\n'
             '      "category": "trigger | service | logic | output",\n'
             '      "type": "gmail | slack | condition | http_request 등",\n'
@@ -85,29 +95,33 @@ class LLMService:
             '      "outputDataType": null,\n'
             '      "role": "start | end | null",\n'
             '      "authWarning": false\n'
-            '    }}\n'
-            '  ],\n'
+            "    }}\n"
+            "  ],\n"
             '  "edges": [\n'
             '    {{ "id": "edge_abc12345", "source": "node_abc12345", "target": "node_def67890" }}\n'
-            '  ],\n'
+            "  ],\n"
             '  "trigger": {{\n'
             '    "type": "manual | schedule | webhook",\n'
             '    "config": {{}}\n'
-            '  }}\n'
-            '}}'
+            "  }}\n"
+            "}}"
         )
 
         if context:
-            template = ChatPromptTemplate.from_messages([
-                ("system", system_prompt),
-                ("human", "컨텍스트:\n{context}\n\n요구사항:\n{prompt}"),
-            ])
+            template = ChatPromptTemplate.from_messages(
+                [
+                    ("system", system_prompt),
+                    ("human", "컨텍스트:\n{context}\n\n요구사항:\n{prompt}"),
+                ]
+            )
             variables = {"prompt": prompt, "context": context}
         else:
-            template = ChatPromptTemplate.from_messages([
-                ("system", system_prompt),
-                ("human", "요구사항:\n{prompt}"),
-            ])
+            template = ChatPromptTemplate.from_messages(
+                [
+                    ("system", system_prompt),
+                    ("human", "요구사항:\n{prompt}"),
+                ]
+            )
             variables = {"prompt": prompt}
 
         chain = template | self._llm | JsonOutputParser()
@@ -143,11 +157,18 @@ class LLMService:
                     continue
 
                 # Server Error (5xx) - 최대 2회 재시도, 지수 백오프
-                if "server" in error_str or "500" in error_str or "502" in error_str or "503" in error_str:
+                if (
+                    "server" in error_str
+                    or "500" in error_str
+                    or "502" in error_str
+                    or "503" in error_str
+                ):
                     if attempt >= 2:
                         break
-                    wait = 2 ** attempt  # 1s, 2s
-                    logger.warning("LLM server error (attempt %d), retrying in %ss: %s", attempt + 1, wait, e)
+                    wait = 2**attempt  # 1s, 2s
+                    logger.warning(
+                        "LLM server error (attempt %d), retrying in %ss: %s", attempt + 1, wait, e
+                    )
                     await asyncio.sleep(wait)
                     continue
 
@@ -168,6 +189,7 @@ class LLMService:
             if "retry" in error_str.lower() and "after" in error_str.lower():
                 # 'Retry-After: N' 패턴에서 숫자 추출 시도
                 import re
+
                 match = re.search(r"retry[- ]?after[:\s]*(\d+\.?\d*)", error_str, re.IGNORECASE)
                 if match:
                     return float(match.group(1))

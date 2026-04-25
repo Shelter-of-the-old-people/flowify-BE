@@ -46,10 +46,7 @@ def mock_db() -> MagicMock:
 
 def make_nodes(*types: str) -> list[NodeDefinition]:
     """노드 타입 문자열로 NodeDefinition 리스트를 생성합니다."""
-    return [
-        NodeDefinition(id=f"node_{i + 1}", type=t, config={})
-        for i, t in enumerate(types)
-    ]
+    return [NodeDefinition(id=f"node_{i + 1}", type=t, config={}) for i, t in enumerate(types)]
 
 
 def make_edges(*pairs: tuple[str, str]) -> list[EdgeDefinition]:

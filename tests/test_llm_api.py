@@ -1,7 +1,7 @@
 from unittest.mock import AsyncMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
+import pytest
 
 from app.common.errors import ErrorCode, FlowifyException
 from app.main import app
@@ -27,7 +27,17 @@ def client():
             return_value={
                 "name": "테스트 워크플로우",
                 "description": "테스트 설명",
-                "nodes": [{"id": "node_1", "type": "input", "category": "trigger", "config": {}, "position": {"x": 0, "y": 0}, "role": "start", "authWarning": False}],
+                "nodes": [
+                    {
+                        "id": "node_1",
+                        "type": "input",
+                        "category": "trigger",
+                        "config": {},
+                        "position": {"x": 0, "y": 0},
+                        "role": "start",
+                        "authWarning": False,
+                    }
+                ],
                 "edges": [],
                 "trigger": {"type": "manual", "config": {}},
             }

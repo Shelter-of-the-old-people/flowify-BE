@@ -1,6 +1,8 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+from app.common.errors import FlowifyException
 from app.core.engine.executor import WorkflowExecutor
 from app.core.engine.state import WorkflowState
 from app.models.workflow import EdgeDefinition, NodeDefinition
@@ -17,10 +19,7 @@ def mock_db():
 
 
 def _make_nodes(*types: str) -> list[NodeDefinition]:
-    return [
-        NodeDefinition(id=f"node_{i+1}", type=t, config={})
-        for i, t in enumerate(types)
-    ]
+    return [NodeDefinition(id=f"node_{i + 1}", type=t, config={}) for i, t in enumerate(types)]
 
 
 def _make_edges(*pairs: tuple[str, str]) -> list[EdgeDefinition]:
@@ -55,7 +54,7 @@ class TestTopologicalSort:
     def test_cycle_raises(self):
         nodes = _make_nodes("input", "llm")
         edges = _make_edges(("node_1", "node_2"), ("node_2", "node_1"))
-        with pytest.raises(Exception):
+        with pytest.raises(FlowifyException):
             WorkflowExecutor._topological_sort(nodes, edges)
 
 
@@ -156,7 +155,11 @@ class TestExecuteWorkflow:
         """로그에 credentials가 포함되지 않는지 확인."""
         executor = WorkflowExecutor(mock_db)
         executor._factory = _mock_factory(
-            return_value={"type": "TEXT", "content": "ok", "credentials": {"secret": "should_be_stripped"}}
+            return_value={
+                "type": "TEXT",
+                "content": "ok",
+                "credentials": {"secret": "should_be_stripped"},
+            }
         )
 
         nodes = _make_nodes("input")

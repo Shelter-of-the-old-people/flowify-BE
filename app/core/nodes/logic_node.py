@@ -26,7 +26,9 @@ class IfElseNodeStrategy(NodeStrategy):
         service_tokens: dict[str, str],
     ) -> dict[str, Any]:
         runtime_config = node.get("runtime_config") or {}
-        condition_field = runtime_config.get("condition_field") or self.config.get("condition_field", "")
+        condition_field = runtime_config.get("condition_field") or self.config.get(
+            "condition_field", ""
+        )
         expected_value = runtime_config.get("expected_value") or self.config.get("expected_value")
 
         # canonical payload에서 조건 평가
@@ -43,9 +45,7 @@ class IfElseNodeStrategy(NodeStrategy):
 
     def validate(self, node: dict[str, Any]) -> bool:
         runtime_config = node.get("runtime_config") or {}
-        return bool(
-            runtime_config.get("condition_field") or self.config.get("condition_field")
-        )
+        return bool(runtime_config.get("condition_field") or self.config.get("condition_field"))
 
 
 class LoopNodeStrategy(NodeStrategy):
@@ -62,10 +62,13 @@ class LoopNodeStrategy(NodeStrategy):
     ) -> dict[str, Any]:
         runtime_config = node.get("runtime_config") or {}
         max_iterations = min(
-            runtime_config.get("max_iterations") or self.config.get("max_iterations", MAX_LOOP_ITERATIONS),
+            runtime_config.get("max_iterations")
+            or self.config.get("max_iterations", MAX_LOOP_ITERATIONS),
             MAX_LOOP_ITERATIONS,
         )
-        transform_field = runtime_config.get("transform_field") or self.config.get("transform_field")
+        transform_field = runtime_config.get("transform_field") or self.config.get(
+            "transform_field"
+        )
 
         # canonical payload에서 items 추출
         items = []
@@ -101,6 +104,4 @@ class LoopNodeStrategy(NodeStrategy):
 
     def validate(self, node: dict[str, Any]) -> bool:
         runtime_config = node.get("runtime_config") or {}
-        return bool(
-            runtime_config.get("node_type") or self.config.get("items_field")
-        )
+        return bool(runtime_config.get("node_type") or self.config.get("items_field"))
