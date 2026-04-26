@@ -1,5 +1,5 @@
 import copy
-from datetime import datetime
+from datetime import UTC, datetime
 
 
 class SnapshotManager:
@@ -13,7 +13,7 @@ class SnapshotManager:
             {
                 "node_id": node_id,
                 "data": copy.deepcopy(data),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             }
         )
 

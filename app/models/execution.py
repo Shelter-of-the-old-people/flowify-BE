@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
@@ -6,7 +6,7 @@ from app.core.engine.state import WorkflowState
 
 
 class NodeSnapshot(BaseModel):
-    capturedAt: datetime = Field(default_factory=datetime.utcnow)  # noqa: N815
+    capturedAt: datetime = Field(default_factory=lambda: datetime.now(UTC))  # noqa: N815
     stateData: dict = Field(default_factory=dict)  # noqa: N815
 
 
@@ -28,7 +28,7 @@ class NodeExecutionLog(BaseModel):
     outputData: dict = Field(default_factory=dict)  # noqa: N815
     snapshot: NodeSnapshot | None = None
     error: ErrorDetail | None = None
-    startedAt: datetime = Field(default_factory=datetime.utcnow)  # noqa: N815
+    startedAt: datetime = Field(default_factory=lambda: datetime.now(UTC))  # noqa: N815
     finishedAt: datetime | None = None  # noqa: N815
 
 
@@ -47,5 +47,5 @@ class WorkflowExecution(BaseModel):
     state: WorkflowState = WorkflowState.PENDING
     nodeLogs: list[NodeExecutionLog] = Field(default_factory=list)  # noqa: N815
     errorMessage: str | None = None  # noqa: N815
-    startedAt: datetime = Field(default_factory=datetime.utcnow)  # noqa: N815
+    startedAt: datetime = Field(default_factory=lambda: datetime.now(UTC))  # noqa: N815
     finishedAt: datetime | None = None  # noqa: N815

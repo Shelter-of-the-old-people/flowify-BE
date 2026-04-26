@@ -1,7 +1,7 @@
 import asyncio
 from collections import defaultdict, deque
 import copy
-from datetime import datetime
+from datetime import UTC, datetime
 import traceback
 from typing import Any
 import uuid
@@ -82,7 +82,7 @@ class WorkflowExecutor:
             workflowId=workflow_id,
             userId=user_id,
             state=WorkflowState.PENDING,
-            startedAt=datetime.utcnow(),
+            startedAt=datetime.now(UTC),
         )
 
         # edges -> 토폴로지 정렬로 실행 순서 결정
@@ -112,14 +112,14 @@ class WorkflowExecutor:
                                 NodeExecutionLog(
                                     nodeId=rem_id,
                                     status="skipped",
-                                    startedAt=datetime.utcnow(),
-                                    finishedAt=datetime.utcnow(),
+                                    startedAt=datetime.now(UTC),
+                                    finishedAt=datetime.now(UTC),
                                 )
                             )
                     state_manager.transition(WorkflowState.STOPPED)
                     execution.state = WorkflowState.STOPPED
                     execution.errorMessage = "Execution stopped by user request"
-                    execution.finishedAt = datetime.utcnow()
+                    execution.finishedAt = datetime.now(UTC)
                     await self._finalize_execution(execution_id, execution)
                     return execution
 
@@ -128,8 +128,8 @@ class WorkflowExecutor:
                         NodeExecutionLog(
                             nodeId=node_id,
                             status="skipped",
-                            startedAt=datetime.utcnow(),
-                            finishedAt=datetime.utcnow(),
+                            startedAt=datetime.now(UTC),
+                            finishedAt=datetime.now(UTC),
                         )
                     )
                     continue
@@ -156,8 +156,8 @@ class WorkflowExecutor:
                                 NodeExecutionLog(
                                     nodeId=rem_id,
                                     status="skipped",
-                                    startedAt=datetime.utcnow(),
-                                    finishedAt=datetime.utcnow(),
+                                    startedAt=datetime.now(UTC),
+                                    finishedAt=datetime.now(UTC),
                                 )
                             )
 
@@ -167,7 +167,7 @@ class WorkflowExecutor:
                     execution.errorMessage = (
                         node_log.error.message if node_log.error else "노드 실행 실패"
                     )
-                    execution.finishedAt = datetime.utcnow()
+                    execution.finishedAt = datetime.now(UTC)
                     await self._finalize_execution(execution_id, execution)
                     return execution
 
@@ -193,7 +193,7 @@ class WorkflowExecutor:
 
             state_manager.transition(WorkflowState.SUCCESS)
             execution.state = WorkflowState.SUCCESS
-            execution.finishedAt = datetime.utcnow()
+            execution.finishedAt = datetime.now(UTC)
             await self._finalize_execution(execution_id, execution)
             return execution
 
@@ -208,7 +208,7 @@ class WorkflowExecutor:
         snapshot_manager: SnapshotManager,
     ) -> NodeExecutionLog:
         """단일 노드 실행. 스냅샷 저장, 타이밍 측정, 에러 캐치."""
-        started_at = datetime.utcnow()
+        started_at = datetime.now(UTC)
 
         # 실행 전 스냅샷 저장
         snapshot_data = self._sanitize_for_log(input_data)
@@ -236,7 +236,7 @@ class WorkflowExecutor:
                     stateData=snapshot_data,
                 ),
                 startedAt=started_at,
-                finishedAt=datetime.utcnow(),
+                finishedAt=datetime.now(UTC),
             )
 
         except FlowifyException as e:
@@ -254,7 +254,7 @@ class WorkflowExecutor:
                     stackTrace=traceback.format_exc() if settings.APP_DEBUG else None,
                 ),
                 startedAt=started_at,
-                finishedAt=datetime.utcnow(),
+                finishedAt=datetime.now(UTC),
             )
 
         except Exception as e:
@@ -272,7 +272,7 @@ class WorkflowExecutor:
                     stackTrace=traceback.format_exc() if settings.APP_DEBUG else None,
                 ),
                 startedAt=started_at,
-                finishedAt=datetime.utcnow(),
+                finishedAt=datetime.now(UTC),
             )
 
     async def _save_execution(self, execution_id: str, execution: WorkflowExecution) -> None:
