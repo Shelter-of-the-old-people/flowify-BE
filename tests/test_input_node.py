@@ -284,3 +284,44 @@ def test_validate_no_runtime_source_returns_false() -> None:
     strategy = InputNodeStrategy({})
 
     assert strategy.validate({}) is False
+
+
+async def test_gmail_attachment_email_returns_file_list_metadata(service_tokens: dict) -> None:
+    """attachment_email returns canonical FILE_LIST with attachment metadata."""
+    strategy = InputNodeStrategy({})
+    node = _source_node("gmail", "attachment_email")
+
+    with patch("app.core.nodes.input_node.GmailService") as mock_gmail_class:
+        mock_gmail = mock_gmail_class.return_value
+        mock_gmail.list_messages = AsyncMock(
+            return_value=[
+                {
+                    "id": "msg_1",
+                    "attachments": [
+                        {
+                            "filename": "agenda.pdf",
+                            "mime_type": "application/pdf",
+                            "size": 512,
+                            "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages/msg_1/attachments/a1",
+                        }
+                    ],
+                }
+            ]
+        )
+
+        result = await strategy.execute(node, None, service_tokens)
+
+    assert result == {
+        "type": "FILE_LIST",
+        "items": [
+            {
+                "filename": "agenda.pdf",
+                "mime_type": "application/pdf",
+                "size": 512,
+                "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages/msg_1/attachments/a1",
+            }
+        ],
+    }
+    mock_gmail.list_messages.assert_awaited_once_with(
+        service_tokens["gmail"], query="has:attachment", max_results=1
+    )

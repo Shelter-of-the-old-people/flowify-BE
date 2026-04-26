@@ -88,4 +88,5 @@ def service_tokens() -> dict:
         "notion": "test_notion_token",
         "google_drive": "test_drive_token",
         "google_sheets": "test_sheets_token",
+        "google_calendar": "test_calendar_token",
     }

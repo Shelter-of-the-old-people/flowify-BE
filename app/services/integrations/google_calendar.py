@@ -57,6 +57,21 @@ class GoogleCalendarService(BaseIntegrationService):
             json=event or {},
         )
 
+    async def update_event(
+        self,
+        token: str,
+        calendar_id: str = "primary",
+        event_id: str = "",
+        event: dict | None = None,
+    ) -> dict:
+        """캘린더 이벤트를 수정합니다."""
+        return await self._request(
+            "PUT",
+            f"{CALENDAR_API}/calendars/{calendar_id}/events/{event_id}",
+            token,
+            json=event or {},
+        )
+
     async def list_calendars(self, token: str) -> list[dict]:
         """사용자 캘린더 목록을 조회합니다."""
         data = await self._request(

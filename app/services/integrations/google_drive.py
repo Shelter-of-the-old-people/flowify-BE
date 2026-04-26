@@ -1,15 +1,19 @@
+import json
+from uuid import uuid4
+
 from app.services.integrations.base import BaseIntegrationService
 
 DRIVE_API = "https://www.googleapis.com/drive/v3"
+DRIVE_UPLOAD_API = "https://www.googleapis.com/upload/drive/v3"
 
 
 class GoogleDriveService(BaseIntegrationService):
-    """Google Drive API 연동 서비스 (DC-F0401)."""
+    """Google Drive API integration service."""
 
     async def list_files(
         self, token: str, folder_id: str | None = None, max_results: int = 50
     ) -> list[dict]:
-        """폴더 내 파일 목록을 조회합니다."""
+        """List files in a Drive folder."""
         query = f"'{folder_id}' in parents and trashed=false" if folder_id else "trashed=false"
         data = await self._request(
             "GET",
@@ -24,11 +28,7 @@ class GoogleDriveService(BaseIntegrationService):
         return data.get("files", [])
 
     async def download_file(self, token: str, file_id: str) -> dict:
-        """파일 메타데이터와 텍스트 내용을 반환합니다.
-
-        Google Docs/Sheets/Slides는 export, 일반 파일은 직접 다운로드.
-        """
-        # 먼저 메타데이터 조회
+        """Return Drive file metadata and text-like content."""
         meta = await self._request(
             "GET",
             f"{DRIVE_API}/files/{file_id}",
@@ -37,7 +37,6 @@ class GoogleDriveService(BaseIntegrationService):
         )
         mime = meta.get("mimeType", "")
 
-        # Google Docs 계열은 텍스트로 export
         export_map = {
             "application/vnd.google-apps.document": "text/plain",
             "application/vnd.google-apps.spreadsheet": "text/csv",
@@ -67,17 +66,32 @@ class GoogleDriveService(BaseIntegrationService):
         }
 
     async def upload_file(
-        self, token: str, name: str, content: bytes, folder_id: str | None = None
+        self,
+        token: str,
+        name: str,
+        content: bytes,
+        folder_id: str | None = None,
+        mime_type: str = "application/octet-stream",
     ) -> dict:
-        """파일을 업로드합니다 (메타데이터 전용, 간이 업로드)."""
+        """Upload Drive metadata and file content with multipart upload."""
         metadata: dict = {"name": name}
         if folder_id:
             metadata["parents"] = [folder_id]
 
+        boundary = f"flowify_{uuid4().hex}"
+        body = (
+            f"--{boundary}\r\n"
+            "Content-Type: application/json; charset=UTF-8\r\n\r\n"
+            f"{json.dumps(metadata)}\r\n"
+            f"--{boundary}\r\n"
+            f"Content-Type: {mime_type}\r\n\r\n"
+        ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
+
         return await self._request(
             "POST",
-            f"{DRIVE_API}/files",
+            f"{DRIVE_UPLOAD_API}/files",
             token,
-            json=metadata,
-            params={"uploadType": "multipart"},
+            content=body,
+            headers={"Content-Type": f"multipart/related; boundary={boundary}"},
+            params={"uploadType": "multipart", "fields": "id,name,mimeType,webViewLink"},
         )

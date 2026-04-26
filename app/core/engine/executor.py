@@ -354,13 +354,13 @@ class WorkflowExecutor:
             n.id for n in nodes if (getattr(n, "runtime_type", None) or n.type) == "if_else"
         }
 
-        # label이 ��는 edge 먼저 처리
+        # label이 있는 edge 먼저 처리
         branch_map: dict[str, dict[str, str]] = {}
         for edge in edges:
             if edge.source in if_else_ids and edge.label in ("true", "false"):
                 branch_map.setdefault(edge.source, {})[edge.label] = edge.target
 
-        # label 없는 경우: if_else 노드의 outgoing edge 순서로 true/false ��정
+        # label 없는 경우: if_else 노드의 outgoing edge 순서로 true/false 지정
         outgoing: dict[str, list[str]] = defaultdict(list)
         for edge in edges:
             if edge.source in if_else_ids and edge.label not in ("true", "false"):

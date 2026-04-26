@@ -28,6 +28,7 @@ class BaseIntegrationService:
         token: str,
         *,
         json: dict | None = None,
+        content: bytes | str | None = None,
         params: dict | None = None,
         headers: dict | None = None,
         timeout: float = 30.0,
@@ -49,6 +50,7 @@ class BaseIntegrationService:
                         url=url,
                         headers=req_headers,
                         json=json,
+                        content=content,
                         params=params,
                     )
 

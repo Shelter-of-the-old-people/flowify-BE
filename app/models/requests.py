@@ -16,8 +16,8 @@ class WorkflowExecuteRequest(BaseModel):
             "service_tokens": { "gmail": "ya29...", "slack": "xoxb-..." }
         }
 
-    service_tokens 키: NodeDefinition.type (category == "service" 인 노드만)
-    service_tokens 값: OAuth 액세스 토큰 복호화 평문
+    service_tokens 키: runtime_source.service / runtime_sink.service 값
+    service_tokens 값: 외부 API에 Bearer 토큰으로 바로 전달 가능한 복호화된 OAuth access token
     """
 
     workflow: WorkflowDefinition
