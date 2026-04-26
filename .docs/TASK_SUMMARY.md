@@ -25,10 +25,12 @@ FastAPI 백엔드 구현율: 약 85%  (v2 컨트랙트 + 스케줄러/스냅샷/
    - Stop race condition 보호 (조건부 upsert)
    - MongoDB 인덱스 필드명 수정
    - 스케줄러 API (trigger.py CRUD + scheduled workflow execution + main.py 초기화 + router 등록)
+   - FastAPI -> Spring 실행 완료 callback 발신 서비스 추가
    - Snapshot DB 조회 메서드 (get_snapshot_from_db, get_last_success_snapshot)
    - Rollback 응답 개선 (errorMessage/finishedAt 초기화)
-   - 테스트 159개 통과 (21개 파일)
+   - 테스트 165개 통과 (22개 파일)
    - FE Docker Spring -> 현재 로컬 FastAPI `execute` 실연동 검증 완료 (2026-04-26)
+   - FastAPI -> Spring 자동 callback 실연동 검증 완료 (`completed` + `finishedAt` 반영, 2026-04-26)
 
 ⚠️ 미완성 부분 (TODO 남음)
    - VectorService/RAG 기능
@@ -63,7 +65,7 @@ FastAPI 백엔드 구현율: 약 85%  (v2 컨트랙트 + 스케줄러/스냅샷/
 | 작업자 | 역할 | 핵심 가치 | v2 후 남은 작업 |
 |--------|------|---------|---------------|
 | **A** | 노드 통합 & 서비스 연동 | 실제 워크플로우 E2E 데모 가능하게 함 | 완료 — REST API 재시도 수정, Input/Output 테스트 작성 |
-| **B** | 실행 엔진 안정화 & 스케줄러 | 스케줄 기능 추가 | 완료 — trigger CRUD, scheduled execution, MongoDB jobstore, Loop/Scheduler/Trigger 테스트 작성, Spring -> FastAPI `execute` 실연동 검증 |
+| **B** | 실행 엔진 안정화 & 스케줄러 | 스케줄 기능 추가 | 완료 — trigger CRUD, scheduled execution, MongoDB jobstore, Spring callback sender, Loop/Scheduler/Trigger/Callback 테스트 작성, Spring -> FastAPI `execute` 및 FastAPI -> Spring callback 실연동 검증 |
 | **C** | 스냅샷/롤백 & 고급 기능 | 안정성 개선 + RAG 기능 | VectorService, ChromaDB volume, 관련 테스트 보강 |
 
 ---
@@ -89,6 +91,7 @@ FastAPI 백엔드 구현율: 약 85%  (v2 컨트랙트 + 스케줄러/스냅샷/
 | `app/main.py` | SchedulerService 초기화 + app.state 등록 | B | ✅ 구현 완료 |
 | `app/api/v1/router.py` | trigger 라우터 등록 | B | ✅ 구현 완료 |
 | `app/services/scheduler_service.py` | MongoDB jobstore 설정 | B | ✅ 구현 완료 |
+| `app/services/spring_callback_service.py` | FastAPI -> Spring 실행 완료 callback 전송 서비스 | B | ✅ 구현 완료 |
 | `app/core/engine/snapshot.py` | DB 조회 메서드 (get_snapshot_from_db, get_last_success_snapshot) | C | ✅ 구현 완료 |
 | `app/api/v1/endpoints/execution.py` | rollback 개선 (errorMessage/finishedAt 초기화) | C | ✅ 구현 완료 |
 | `app/services/integrations/rest_api.py` | 공개 API도 `_request()` 경유로 재시도/에러 래핑 통일 | A | ✅ 구현 완료 |
@@ -97,6 +100,7 @@ FastAPI 백엔드 구현율: 약 85%  (v2 컨트랙트 + 스케줄러/스냅샷/
 | `tests/test_loop_node.py` | Loop 노드 테스트 (v2 시그니처) | B | ✅ 작성 완료 |
 | `tests/test_scheduler.py` | SchedulerService 테스트 | B | ✅ 작성 완료 |
 | `tests/test_trigger_api.py` | Trigger API 및 scheduled workflow helper 테스트 | B | ✅ 작성 완료 |
+| `tests/test_spring_callback_service.py` | Spring callback payload/오류 허용 테스트 | B | ✅ 작성 완료 |
 
 ### 중간 발표 (4/29) 전 완료 필수
 
@@ -184,7 +188,7 @@ C-4 (VectorService) ───────────────────→
 ## 테스트 현황
 
 ```
-현재 테스트: 159개 통과 (21개 파일)
+현재 테스트: 165개 통과 (22개 파일)
 ──────────────────────────────────
 있음: test_errors, test_execution_api, test_executor, test_health,
       test_input_node, test_output_node, test_loop_node, test_scheduler, test_trigger_api,

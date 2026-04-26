@@ -32,12 +32,14 @@
 | `app/core/nodes/logic_node.py` | ✅ **완료** — v2 시그니처 + canonical payload 기반 Loop/IfElse |
 | `app/core/nodes/factory.py` | ✅ **완료** — create_from_node_def + infer_runtime_type |
 | `app/services/scheduler_service.py` | ✅ **완료** — MongoDB jobstore 설정 추가 |
+| `app/services/spring_callback_service.py` | ✅ **완료** — FastAPI -> Spring 실행 완료 callback 전송 서비스 추가 |
 | `app/api/v1/endpoints/trigger.py` | ✅ **완료** — 스케줄러 API CRUD + scheduled workflow execution 연결 |
 | `app/api/v1/router.py` | ✅ **완료** — trigger 라우터 등록 |
 | `app/main.py` | ✅ **완료** — SchedulerService 초기화 |
 | `tests/test_loop_node.py` | ✅ **완료** — v2 시그니처 기준 테스트 작성 |
 | `tests/test_scheduler.py` | ✅ **완료** — SchedulerService 테스트 작성 |
 | `tests/test_trigger_api.py` | ✅ **완료** — Trigger API 및 scheduled workflow helper 테스트 작성 |
+| `tests/test_spring_callback_service.py` | ✅ **완료** — Spring callback payload/오류 허용 테스트 작성 |
 
 ---
 
@@ -370,6 +372,26 @@ Spring MongoDB에 workflow 문서를 직접 삽입해 execute를 검증할 때, 
 
 ---
 
+## ✅ B-9. [완료] FastAPI -> Spring 실행 완료 callback 발신
+
+`app/services/spring_callback_service.py`를 추가하고, `WorkflowExecutor`의 종료 분기(success / rollback_available / stopped)에서 callback을 전송하도록 연결했습니다.
+
+- 설정 추가: `SPRING_BASE_URL`, `SPRING_CALLBACK_TIMEOUT_SECONDS`
+- 전송 경로: `POST {SPRING_BASE_URL}/api/internal/executions/{execId}/complete`
+- 헤더: `X-Internal-Token`
+- payload: `status`, `durationMs`, `output`, `error`
+- 장애 허용: callback 실패가 워크플로우 실행 자체를 깨지 않도록 warning 로그 후 swallow
+
+검증:
+- `tests/test_spring_callback_service.py` 작성
+- `tests/test_executor.py`에 success / failure / stopped callback 연동 테스트 추가
+- `python -m pytest -q` 기준 `165 passed`
+- FE Docker Spring + Atlas 기준 실연동 재검증 완료 (2026-04-26)
+  - 검증용 로컬 FastAPI를 `8001`에 기동한 뒤 `POST /api/v1/workflows/{id}/execute` 호출
+  - 최종 상태가 `completed`로 조회되고, `workflow_executions.finishedAt`까지 반영되는 것 확인
+
+---
+
 ## 잠재적 오류 & 주의사항
 
 ### 1. APScheduler 버전 호환성
@@ -411,4 +433,7 @@ Spring MongoDB에 workflow 문서를 직접 삽입해 execute를 검증할 때, 
 - [x] `tests/test_scheduler.py` 작성 ✅ 작성 완료 및 통과
 - [x] `trigger.py` 실제 scheduled workflow execution 연결 ✅ 구현 완료
 - [x] `tests/test_trigger_api.py` 작성 ✅ 작성 완료 및 통과
+- [x] FastAPI -> Spring 실행 완료 callback 발신부 구현 ✅ 완료
+- [x] `tests/test_spring_callback_service.py` 작성 및 executor callback 연동 테스트 추가 ✅ 완료
 - [x] FE Docker Spring 기준 `execute` 실연동 검증 완료 (2026-04-26)
+- [x] FE Docker Spring + Atlas 기준 FastAPI -> Spring 자동 callback 실연동 검증 완료 (`completed`/`finishedAt`, 2026-04-26)
