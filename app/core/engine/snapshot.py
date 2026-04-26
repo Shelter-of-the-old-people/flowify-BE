@@ -1,5 +1,6 @@
 import copy
 from datetime import UTC, datetime
+from typing import Any
 
 
 class SnapshotManager:
@@ -46,7 +47,7 @@ class SnapshotManager:
         return None
 
     @staticmethod
-    async def get_snapshot_from_db(db, execution_id: str, node_id: str) -> dict | None:
+    async def get_snapshot_from_db(db: Any, execution_id: str, node_id: str) -> dict | None:
         """MongoDB에서 특정 노드의 스냅샷 데이터를 조회합니다."""
         doc = await db.workflow_executions.find_one({"_id": execution_id})
         if not doc:
@@ -57,12 +58,12 @@ class SnapshotManager:
         return None
 
     @staticmethod
-    async def get_last_success_snapshot(db, execution_id: str) -> tuple[str, dict] | None:
-        """MongoDB에서 마지막 성공 노드의 (node_id, snapshot_data)를 반환합니다."""
+    async def get_last_success_snapshot(db: Any, execution_id: str) -> dict | None:
+        """MongoDB에서 마지막 성공 노드의 스냅샷 데이터를 조회합니다."""
         doc = await db.workflow_executions.find_one({"_id": execution_id})
         if not doc:
             return None
         for log in reversed(doc.get("nodeLogs", [])):
             if log.get("status") == "success" and log.get("snapshot"):
-                return log.get("nodeId"), log["snapshot"].get("stateData")
+                return log["snapshot"].get("stateData")
         return None
