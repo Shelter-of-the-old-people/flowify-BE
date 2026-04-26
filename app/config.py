@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     GITHUB_TOKEN: str = ""
 
     INTERNAL_API_SECRET: str = ""
+    SPRING_BASE_URL: str = ""
+    SPRING_CALLBACK_TIMEOUT_SECONDS: float = 5.0
 
     model_config = {
         "env_file": str(BASE_DIR / ".env"),

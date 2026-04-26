@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.common.errors import FlowifyException
-from app.core.engine.executor import WorkflowExecutor
+from app.core.engine.executor import WorkflowExecutor, register_cancellation_event
 from app.core.engine.state import WorkflowState
 from app.models.workflow import EdgeDefinition, NodeDefinition
 
@@ -24,6 +24,12 @@ def _make_nodes(*types: str) -> list[NodeDefinition]:
 
 def _make_edges(*pairs: tuple[str, str]) -> list[EdgeDefinition]:
     return [EdgeDefinition(source=s, target=t) for s, t in pairs]
+
+
+def _make_callback_service() -> MagicMock:
+    callback_service = MagicMock()
+    callback_service.notify_execution_complete = AsyncMock()
+    return callback_service
 
 
 class TestTopologicalSort:
@@ -176,6 +182,76 @@ class TestExecuteWorkflow:
 
         log = result.nodeLogs[0]
         assert "credentials" not in (log.outputData or {})
+
+    @pytest.mark.asyncio
+    async def test_success_sends_spring_callback(self, mock_db):
+        """성공 종료 시 Spring 완료 콜백이 호출되는지 검증합니다."""
+        callback_service = _make_callback_service()
+        executor = WorkflowExecutor(mock_db, callback_service=callback_service)
+        executor._factory = _mock_factory(return_value={"type": "TEXT", "content": "ok"})
+
+        result = await executor.execute(
+            execution_id="exec_callback_success",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=_make_nodes("input"),
+            edges=[],
+            service_tokens={},
+        )
+
+        callback_service.notify_execution_complete.assert_awaited_once_with(
+            "exec_callback_success", result
+        )
+
+    @pytest.mark.asyncio
+    async def test_failure_sends_spring_callback(self, mock_db):
+        """실패 종료 시 Spring 완료 콜백이 호출되는지 검증합니다."""
+        callback_service = _make_callback_service()
+        executor = WorkflowExecutor(mock_db, callback_service=callback_service)
+        executor._factory = _mock_factory(
+            side_effect=[
+                {"type": "TEXT", "content": "ok"},
+                RuntimeError("LLM failed"),
+            ]
+        )
+
+        result = await executor.execute(
+            execution_id="exec_callback_failure",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=_make_nodes("input", "llm", "output"),
+            edges=_make_edges(("node_1", "node_2"), ("node_2", "node_3")),
+            service_tokens={},
+        )
+
+        assert result.state == WorkflowState.ROLLBACK_AVAILABLE
+        callback_service.notify_execution_complete.assert_awaited_once_with(
+            "exec_callback_failure", result
+        )
+
+    @pytest.mark.asyncio
+    async def test_stopped_execution_sends_spring_callback(self, mock_db):
+        """중지 종료 시 Spring 완료 콜백이 호출되는지 검증합니다."""
+        callback_service = _make_callback_service()
+        executor = WorkflowExecutor(mock_db, callback_service=callback_service)
+        executor._factory = _mock_factory(return_value={"type": "TEXT", "content": "ok"})
+
+        cancel_event = register_cancellation_event("exec_callback_stopped")
+        cancel_event.set()
+
+        result = await executor.execute(
+            execution_id="exec_callback_stopped",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=_make_nodes("input"),
+            edges=[],
+            service_tokens={},
+        )
+
+        assert result.state == WorkflowState.STOPPED
+        callback_service.notify_execution_complete.assert_awaited_once_with(
+            "exec_callback_stopped", result
+        )
 
 
 class TestGenerateExecutionId:

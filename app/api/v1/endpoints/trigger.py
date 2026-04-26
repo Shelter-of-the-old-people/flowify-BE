@@ -1,7 +1,13 @@
-from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from typing import Any
 
+from fastapi import APIRouter, Depends, Request
+from pydantic import BaseModel, Field, model_validator
+
+from app.api.v1.deps import get_user_id
 from app.common.errors import ErrorCode, FlowifyException
+from app.core.engine.executor import WorkflowExecutor, register_cancellation_event
+from app.db.mongodb import get_database
+from app.models.workflow import WorkflowDefinition
 from app.services.scheduler_service import SchedulerService
 
 router = APIRouter()
@@ -10,9 +16,28 @@ router = APIRouter()
 class TriggerCreateRequest(BaseModel):
     """스케줄 트리거 등록 요청 모델."""
 
+    model_config = {"populate_by_name": True}
+
     workflow_id: str
+    user_id: str | None = None
     trigger_type: str = "cron"
-    config: dict = {}
+    config: dict[str, Any] = Field(default_factory=dict)
+    workflow_definition: WorkflowDefinition
+    service_tokens: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_fields(cls, data: Any) -> Any:
+        """이전 설계 문서의 필드명(type, credentials)도 허용합니다."""
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+        if "trigger_type" not in normalized and "type" in normalized:
+            normalized["trigger_type"] = normalized["type"]
+        if "service_tokens" not in normalized and "credentials" in normalized:
+            normalized["service_tokens"] = normalized["credentials"]
+        return normalized
 
 
 class TriggerResponse(BaseModel):
@@ -28,6 +53,28 @@ def _get_scheduler(request: Request) -> SchedulerService:
     return request.app.state.scheduler
 
 
+async def _run_scheduled_workflow(
+    workflow_id: str,
+    workflow_definition: dict[str, Any],
+    service_tokens: dict[str, str],
+    user_id: str,
+) -> None:
+    """APScheduler job에서 워크플로우 실행 엔진을 직접 호출합니다."""
+    workflow_def = WorkflowDefinition.model_validate(workflow_definition)
+    execution_id = WorkflowExecutor.generate_execution_id()
+    register_cancellation_event(execution_id)
+
+    executor = WorkflowExecutor(get_database())
+    await executor.execute(
+        execution_id=execution_id,
+        workflow_id=workflow_id or (workflow_def.id or ""),
+        user_id=user_id,
+        nodes=workflow_def.nodes,
+        edges=workflow_def.edges,
+        service_tokens=service_tokens,
+    )
+
+
 @router.get("")
 async def list_triggers(request: Request) -> list[dict]:
     """등록된 스케줄 목록을 조회합니다."""
@@ -39,6 +86,7 @@ async def list_triggers(request: Request) -> list[dict]:
 async def create_trigger(
     body: TriggerCreateRequest,
     request: Request,
+    user_id: str = Depends(get_user_id),
 ) -> TriggerResponse:
     """워크플로우 스케줄 트리거를 등록합니다.
 
@@ -48,6 +96,34 @@ async def create_trigger(
     """
     scheduler = _get_scheduler(request)
     trigger_id = f"trigger_{body.workflow_id}"
+    workflow_def = body.workflow_definition
+
+    if body.user_id and body.user_id != user_id:
+        raise FlowifyException(
+            ErrorCode.INVALID_REQUEST,
+            detail="요청 본문의 user_id와 인증된 사용자 정보가 일치하지 않습니다.",
+        )
+
+    if workflow_def.id and workflow_def.id != body.workflow_id:
+        raise FlowifyException(
+            ErrorCode.INVALID_REQUEST,
+            detail="workflow_id와 workflow_definition.id가 일치하지 않습니다.",
+        )
+
+    if workflow_def.user_id != user_id:
+        raise FlowifyException(
+            ErrorCode.INVALID_REQUEST,
+            detail="workflow_definition.user_id와 인증된 사용자 정보가 일치하지 않습니다.",
+        )
+
+    job_kwargs = {
+        "workflow_id": body.workflow_id,
+        "workflow_definition": workflow_def.model_copy(
+            update={"id": body.workflow_id, "user_id": user_id}
+        ).model_dump(by_alias=False, exclude_none=True),
+        "service_tokens": body.service_tokens,
+        "user_id": user_id,
+    }
 
     try:
         if body.trigger_type == "cron":
@@ -55,18 +131,20 @@ async def create_trigger(
             minute = body.config.get("minute", 0)
             scheduler.add_cron_job(
                 job_id=trigger_id,
-                func=lambda: None,
+                func=_run_scheduled_workflow,
                 hour=hour,
                 minute=minute,
-                kwargs={"workflow_id": body.workflow_id},
+                kwargs=job_kwargs,
+                replace_existing=True,
             )
         elif body.trigger_type == "interval":
             seconds = body.config.get("seconds", 60)
             scheduler.add_interval_job(
                 job_id=trigger_id,
-                func=lambda: None,
+                func=_run_scheduled_workflow,
                 seconds=seconds,
-                kwargs={"workflow_id": body.workflow_id},
+                kwargs=job_kwargs,
+                replace_existing=True,
             )
         else:
             raise FlowifyException(

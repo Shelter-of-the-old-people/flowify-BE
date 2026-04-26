@@ -20,6 +20,7 @@ from app.models.execution import (
     WorkflowExecution,
 )
 from app.models.workflow import EdgeDefinition, NodeDefinition
+from app.services.spring_callback_service import SpringExecutionCallbackService
 
 # ── 취소 레지스트리 ──
 # execution_id → asyncio.Event. stop 엔드포인트가 event.set() 호출,
@@ -55,9 +56,14 @@ class WorkflowExecutor:
     - service_tokens를 별도 파라미터로 전략에 전달
     """
 
-    def __init__(self, db: AsyncIOMotorDatabase):
+    def __init__(
+        self,
+        db: AsyncIOMotorDatabase,
+        callback_service: SpringExecutionCallbackService | None = None,
+    ):
         self._db = db
         self._factory = NodeFactory()
+        self._callback_service = callback_service or SpringExecutionCallbackService()
 
     async def execute(
         self,
@@ -114,7 +120,7 @@ class WorkflowExecutor:
                     execution.state = WorkflowState.STOPPED
                     execution.errorMessage = "Execution stopped by user request"
                     execution.finishedAt = datetime.utcnow()
-                    await self._save_execution(execution_id, execution)
+                    await self._finalize_execution(execution_id, execution)
                     return execution
 
                 if node_id in skipped_nodes:
@@ -162,7 +168,7 @@ class WorkflowExecutor:
                         node_log.error.message if node_log.error else "노드 실행 실패"
                     )
                     execution.finishedAt = datetime.utcnow()
-                    await self._save_execution(execution_id, execution)
+                    await self._finalize_execution(execution_id, execution)
                     return execution
 
                 # v2: 성공 시 canonical payload를 node_outputs에 저장
@@ -188,7 +194,7 @@ class WorkflowExecutor:
             state_manager.transition(WorkflowState.SUCCESS)
             execution.state = WorkflowState.SUCCESS
             execution.finishedAt = datetime.utcnow()
-            await self._save_execution(execution_id, execution)
+            await self._finalize_execution(execution_id, execution)
             return execution
 
         finally:
@@ -290,6 +296,11 @@ class WorkflowExecutor:
                 {"$set": doc},
                 upsert=True,
             )
+
+    async def _finalize_execution(self, execution_id: str, execution: WorkflowExecution) -> None:
+        """종료 상태를 저장하고 Spring 완료 콜백을 전송합니다."""
+        await self._save_execution(execution_id, execution)
+        await self._callback_service.notify_execution_complete(execution_id, execution)
 
     @staticmethod
     def _sanitize_for_log(data: dict | None) -> dict:
