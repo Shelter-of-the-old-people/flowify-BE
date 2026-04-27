@@ -6,10 +6,14 @@ runtime_source의 service/mode/target 정보를 바탕으로 외부 서비스에
 참조: FASTAPI_IMPLEMENTATION_GUIDE.md 섹션 5
 """
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from app.common.errors import ErrorCode, FlowifyException
 from app.core.nodes.base import NodeStrategy
+from app.services.integrations.canvas_lms import CanvasLmsService
 from app.services.integrations.gmail import GmailService
 from app.services.integrations.google_drive import GoogleDriveService
 from app.services.integrations.google_sheets import GoogleSheetsService
@@ -34,6 +38,7 @@ SUPPORTED_SOURCES: dict[str, set[str]] = {
     },
     "google_sheets": {"sheet_all", "new_row", "row_updated"},
     "slack": {"channel_messages"},
+    "canvas_lms": {"course_files", "course_new_file", "term_all_files"},
 }
 
 
@@ -71,6 +76,8 @@ class InputNodeStrategy(NodeStrategy):
             return await self._fetch_google_sheets(token, mode, target, canonical_type)
         elif service == "slack":
             return await self._fetch_slack(token, mode, target)
+        elif service == "canvas_lms":
+            return await self._fetch_canvas_lms(token, mode, target)
         else:
             raise FlowifyException(
                 ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
@@ -285,4 +292,67 @@ class InputNodeStrategy(NodeStrategy):
         raise FlowifyException(
             ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
             detail=f"service=slack, mode={mode} is not supported",
+        )
+
+    # ── Canvas LMS ──
+
+    async def _fetch_canvas_lms(
+        self, token: str, mode: str, target: str
+    ) -> dict[str, Any]:
+        svc = CanvasLmsService()
+
+        if mode == "course_files":
+            files = await svc.get_course_files(token, target)
+            return {
+                "type": "FILE_LIST",
+                "items": [svc.to_file_item(f) for f in files],
+            }
+
+        if mode == "course_new_file":
+            f = await svc.get_course_latest_file(token, target)
+            if not f:
+                return {
+                    "type": "SINGLE_FILE",
+                    "filename": "",
+                    "content": None,
+                    "mime_type": "",
+                    "url": "",
+                }
+            return {
+                "type": "SINGLE_FILE",
+                "filename": f.get("display_name", f.get("filename", "")),
+                "content": None,
+                "mime_type": f.get("content-type", "application/octet-stream"),
+                "url": f.get("url", ""),
+            }
+
+        if mode == "term_all_files":
+            courses = await svc.get_active_courses(token)
+            matching = [
+                c for c in courses
+                if c.get("term", {}).get("name") == target and c.get("name")
+            ]
+            if not matching:
+                raise FlowifyException(
+                    ErrorCode.NODE_EXECUTION_FAILED,
+                    detail=f"학기 '{target}'에 해당하는 과목이 없습니다.",
+                )
+
+            all_items: list[dict] = []
+            for course in matching:
+                try:
+                    files = await svc.get_course_files(token, str(course["id"]))
+                    all_items.extend(
+                        svc.to_file_item(f, course_name=course["name"]) for f in files
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Canvas LMS 과목 '%s' 파일 조회 실패: %s", course.get("name"), e
+                    )
+                    continue
+            return {"type": "FILE_LIST", "items": all_items}
+
+        raise FlowifyException(
+            ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
+            detail=f"service=canvas_lms, mode={mode} is not supported",
         )

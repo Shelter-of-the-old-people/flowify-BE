@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     SPRING_BASE_URL: str = ""
     SPRING_CALLBACK_TIMEOUT_SECONDS: float = 5.0
 
+    CANVAS_API_URL: str = "https://canvas.kumoh.ac.kr"
+    CANVAS_TOKEN: str = ""
+
+    @property
+    def CANVAS_LMS_API_URL(self) -> str:
+        return f"{self.CANVAS_API_URL.rstrip('/')}/api/v1"
+
     model_config = {
         "env_file": str(BASE_DIR / ".env"),
         "env_file_encoding": "utf-8",
