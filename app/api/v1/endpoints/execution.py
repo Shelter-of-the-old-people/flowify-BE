@@ -16,6 +16,31 @@ _ROLLBACK_ALLOWED_STATES = {
 }
 
 
+def _has_snapshot_state(log: dict) -> bool:
+    snapshot = log.get("snapshot")
+    return isinstance(snapshot, dict) and "stateData" in snapshot
+
+
+def _is_valid_rollback_target(log: dict) -> bool:
+    return log.get("status") == "success" or _has_snapshot_state(log)
+
+
+def _find_rollback_target_node_id(
+    node_logs: list[dict],
+    requested_node_id: str | None,
+) -> str | None:
+    if requested_node_id:
+        for log in node_logs:
+            if log.get("nodeId") == requested_node_id and _is_valid_rollback_target(log):
+                return requested_node_id
+        return None
+
+    for log in reversed(node_logs):
+        if log.get("status") == "success":
+            return log.get("nodeId")
+    return None
+
+
 async def _get_execution_doc(db: AsyncIOMotorDatabase, execution_id: str) -> dict:
     """MongoDB에서 실행 문서를 조회합니다. _id 기준으로 검색."""
     doc = await db.workflow_executions.find_one({"_id": execution_id})
@@ -104,19 +129,19 @@ async def rollback_execution(
 
     # 롤백 대상 노드 결정
     node_logs = doc.get("nodeLogs", [])
-    target_node_id = body.node_id if body else None
+    requested_node_id = body.node_id if body else None
+    target_node_id = _find_rollback_target_node_id(node_logs, requested_node_id)
 
     if not target_node_id:
-        # 마지막 성공 노드 찾기
-        for log in reversed(node_logs):
-            if log.get("status") == "success":
-                target_node_id = log.get("nodeId")
-                break
-
-    if not target_node_id:
+        detail = "롤백할 수 있는 성공 노드가 없습니다."
+        context = {}
+        if requested_node_id:
+            detail = "지정한 롤백 노드에 성공 로그 또는 스냅샷이 없습니다."
+            context = {"node_id": requested_node_id}
         raise FlowifyException(
             ErrorCode.ROLLBACK_UNAVAILABLE,
-            detail="롤백할 수 있는 성공 노드가 없습니다.",
+            detail=detail,
+            context=context,
         )
 
     # 상태를 PENDING으로 전환하고 에러 정보 초기화
