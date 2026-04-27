@@ -5,6 +5,8 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    volumes:
+      - chroma_data:/app/chroma_data
     depends_on:
       - mongodb
 
@@ -17,3 +19,4 @@ services:
 
 volumes:
   mongo_data:
+  chroma_data:

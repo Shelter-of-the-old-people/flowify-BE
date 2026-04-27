@@ -192,6 +192,70 @@ class TestRollbackExecution:
 
         app.dependency_overrides.clear()
 
+    def test_rollback_with_specific_node_id_allows_snapshot_target(self, client):
+        """명시 node_id가 snapshot을 가진 노드면 성공 로그가 아니어도 롤백 허용."""
+        doc = {
+            "_id": "exec_abc123",
+            "state": "rollback_available",
+            "nodeLogs": [
+                {"nodeId": "node_1", "status": "success"},
+                {
+                    "nodeId": "node_2",
+                    "status": "failed",
+                    "snapshot": {"stateData": {"type": "TEXT", "content": "before-fail"}},
+                },
+            ],
+        }
+
+        from app.api.v1.deps import get_db
+
+        mock_db = MagicMock()
+        mock_db.workflow_executions.find_one = AsyncMock(return_value=doc)
+        mock_db.workflow_executions.update_one = AsyncMock()
+        app.dependency_overrides[get_db] = lambda: mock_db
+
+        response = client.post(
+            "/api/v1/executions/exec_abc123/rollback",
+            headers=AUTH_HEADERS,
+            json={"node_id": "node_2"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["rollback_point"] == "node_2"
+
+        app.dependency_overrides.clear()
+
+    def test_rollback_with_specific_node_id_rejects_invalid_target(self, client):
+        """명시 node_id가 성공 로그나 snapshot이 없으면 마지막 성공 노드로 대체하지 않는다."""
+        doc = {
+            "_id": "exec_abc123",
+            "state": "rollback_available",
+            "nodeLogs": [
+                {"nodeId": "node_1", "status": "success"},
+                {"nodeId": "node_2", "status": "skipped"},
+            ],
+        }
+
+        from app.api.v1.deps import get_db
+
+        mock_db = MagicMock()
+        mock_db.workflow_executions.find_one = AsyncMock(return_value=doc)
+        mock_db.workflow_executions.update_one = AsyncMock()
+        app.dependency_overrides[get_db] = lambda: mock_db
+
+        response = client.post(
+            "/api/v1/executions/exec_abc123/rollback",
+            headers=AUTH_HEADERS,
+            json={"node_id": "node_2"},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error_code"] == "ROLLBACK_UNAVAILABLE"
+        mock_db.workflow_executions.update_one.assert_not_called()
+
+        app.dependency_overrides.clear()
+
     def test_rollback_unavailable_state(self, client):
         """success 상태에서는 롤백 불가."""
         doc = {"_id": "exec_abc123", "state": "success", "nodeLogs": []}

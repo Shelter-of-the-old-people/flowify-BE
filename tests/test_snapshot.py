@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock, MagicMock
+
 from app.core.engine.snapshot import SnapshotManager
 
 
@@ -56,3 +58,94 @@ class TestSnapshotManager:
         sm.save("node_1", data)
         data["list"].append(4)
         assert sm.get_snapshot("node_1") == {"list": [1, 2, 3]}
+
+    async def test_get_snapshot_from_db_success(self):
+        """MongoDB에서 특정 노드의 스냅샷 데이터를 조회합니다."""
+        mock_db = MagicMock()
+        mock_db.workflow_executions.find_one = AsyncMock(
+            return_value={
+                "_id": "exec_1",
+                "nodeLogs": [
+                    {
+                        "nodeId": "node_1",
+                        "status": "success",
+                        "snapshot": {"stateData": {"type": "TEXT", "content": "hello"}},
+                    },
+                ],
+            }
+        )
+
+        result = await SnapshotManager.get_snapshot_from_db(mock_db, "exec_1", "node_1")
+
+        assert result == {"type": "TEXT", "content": "hello"}
+
+    async def test_get_snapshot_from_db_not_found(self):
+        """실행 문서가 없으면 None을 반환합니다."""
+        mock_db = MagicMock()
+        mock_db.workflow_executions.find_one = AsyncMock(return_value=None)
+
+        result = await SnapshotManager.get_snapshot_from_db(mock_db, "exec_missing", "node_1")
+
+        assert result is None
+
+    async def test_get_snapshot_from_db_missing_snapshot_returns_none(self):
+        """대상 노드에 스냅샷이 없으면 None을 반환합니다."""
+        mock_db = MagicMock()
+        mock_db.workflow_executions.find_one = AsyncMock(
+            return_value={
+                "_id": "exec_1",
+                "nodeLogs": [
+                    {"nodeId": "node_1", "status": "success", "snapshot": None},
+                ],
+            }
+        )
+
+        result = await SnapshotManager.get_snapshot_from_db(mock_db, "exec_1", "node_1")
+
+        assert result is None
+
+    async def test_get_last_success_snapshot(self):
+        """마지막 성공 노드의 스냅샷 데이터를 반환합니다."""
+        mock_db = MagicMock()
+        mock_db.workflow_executions.find_one = AsyncMock(
+            return_value={
+                "_id": "exec_1",
+                "nodeLogs": [
+                    {
+                        "nodeId": "node_1",
+                        "status": "success",
+                        "snapshot": {"stateData": {"type": "TEXT", "content": "old"}},
+                    },
+                    {
+                        "nodeId": "node_2",
+                        "status": "failed",
+                        "snapshot": {"stateData": {"type": "TEXT", "content": "failed"}},
+                    },
+                    {
+                        "nodeId": "node_3",
+                        "status": "success",
+                        "snapshot": {"stateData": {"type": "SINGLE_FILE", "filename": "a.txt"}},
+                    },
+                ],
+            }
+        )
+
+        result = await SnapshotManager.get_last_success_snapshot(mock_db, "exec_1")
+
+        assert result == {"type": "SINGLE_FILE", "filename": "a.txt"}
+
+    async def test_get_last_success_snapshot_without_success_returns_none(self):
+        """성공 노드 스냅샷이 없으면 None을 반환합니다."""
+        mock_db = MagicMock()
+        mock_db.workflow_executions.find_one = AsyncMock(
+            return_value={
+                "_id": "exec_1",
+                "nodeLogs": [
+                    {"nodeId": "node_1", "status": "failed", "snapshot": None},
+                ],
+            }
+        )
+
+        result = await SnapshotManager.get_last_success_snapshot(mock_db, "exec_1")
+
+        assert result is None

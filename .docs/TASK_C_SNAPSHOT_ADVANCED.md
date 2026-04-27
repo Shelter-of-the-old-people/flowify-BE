@@ -27,9 +27,9 @@
 | `app/core/engine/snapshot.py` | ✅ **완료** — DB 조회 메서드 추가됨 (get_snapshot_from_db, get_last_success_snapshot) |
 | `app/api/v1/endpoints/execution.py` | ✅ **완료** — rollback 개선 (errorMessage/finishedAt 초기화) |
 | `app/models/workflow.py` | ✅ **완료** — EdgeDefinition에 `label: str | None = None` 추가됨 |
-| `app/services/vector_service.py` | ❌ 전체 TODO |
-| `tests/test_snapshot.py` | ⚠️ in-memory 동작만 테스트 — 보완 필요 |
-| `tests/test_vector_service.py` | ❌ 없음 — 신규 작성 |
+| `app/services/vector_service.py` | ✅ **완료** — ChromaDB + OpenAI Embedding 기반 구현 |
+| `tests/test_snapshot.py` | ✅ **완료** — DB 조회 테스트 보강 |
+| `tests/test_vector_service.py` | ✅ **완료** — VectorService 단위 테스트 작성 |
 
 ---
 
@@ -93,6 +93,7 @@ class SnapshotManager:
 ## ✅ C-2. [완료] Rollback — 설계 확정 및 개선
 
 **v2 구현 시 함께 완료됨.** `app/api/v1/endpoints/execution.py`에서 rollback 시 `errorMessage`/`finishedAt` 초기화, 마지막 성공 노드 자동 탐색 등 구현됨.
+추가로 명시 `node_id`가 전달된 경우 해당 노드에 성공 로그 또는 snapshot이 있는지 검증하여, 근거 없는 노드로 롤백 상태를 전환하지 않도록 보강함.
 
 ### 개선
 
@@ -175,7 +176,7 @@ class EdgeDefinition(BaseModel):
 
 ### 현재 상태 (`app/services/vector_service.py`)
 
-전체 TODO. RAG(Retrieval-Augmented Generation) 파이프라인을 위한 벡터 검색 기능.
+구현 완료. RAG(Retrieval-Augmented Generation) 파이프라인을 위한 ChromaDB 기반 벡터 검색 기능을 제공.
 
 ### 기술 선택
 
@@ -375,12 +376,13 @@ Docker 환경에서는 컨테이너 재시작 시 데이터 손실. volume mount
 **중간 발표 (4/29) 전:**
 - [x] `snapshot.py` DB 조회 메서드 추가 ✅ 완료 (get_snapshot_from_db, get_last_success_snapshot)
 - [x] `execution.py` rollback에서 `errorMessage`, `finishedAt` 초기화 추가 ✅ 완료
-- [ ] `test_snapshot.py` DB 조회 테스트 추가
+- [x] `test_snapshot.py` DB 조회 테스트 추가 ✅ 완료
 
 **최종 제출 (6/17) 전:**
 - [x] `workflow.py` EdgeDefinition에 `label: str | None = None` 추가 ✅ v2 완료
-- [ ] `vector_service.py` ChromaDB + OpenAI Embedding 구현
-- [ ] `docker-compose.yml`에 chroma_data volume 추가
+- [x] `vector_service.py` ChromaDB + OpenAI Embedding 구현 ✅ 완료
+- [x] `docker-compose.yml`에 chroma_data volume 추가 ✅ 완료
 - [x] `pyproject.toml`에 chromadb 추가 ✅ 완료
-- [ ] `tests/test_vector_service.py` 작성 — 스켈레톤 생성됨
-- [ ] Spring Boot 담당자와 롤백 후 재실행 흐름 확인
+- [x] `tests/test_vector_service.py` 작성 ✅ 완료
+- [x] rollback 명시 `node_id` 검증 보강 ✅ 완료
+- [ ] Spring Boot 담당자와 롤백 후 재실행 흐름 확인 — 별도 통합 검증 필요
