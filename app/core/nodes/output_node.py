@@ -7,6 +7,8 @@ import json
 import logging
 from typing import Any
 
+import httpx
+
 from app.common.errors import ErrorCode, FlowifyException
 from app.core.nodes.base import NodeStrategy
 from app.services.integrations.gmail import GmailService
@@ -85,7 +87,9 @@ class OutputNodeStrategy(NodeStrategy):
         elif service == "notion":
             result = await self._send_notion(token, sink_config, input_data or {})
         elif service == "google_drive":
-            result = await self._send_google_drive(token, sink_config, input_data or {})
+            result = await self._send_google_drive(
+                token, sink_config, input_data or {}, service_tokens
+            )
         elif service == "google_sheets":
             result = await self._send_google_sheets(token, sink_config, input_data or {})
         elif service == "google_calendar":
@@ -150,15 +154,21 @@ class OutputNodeStrategy(NodeStrategy):
             return await svc.create_page(token, target_id, "Flowify Data", content)
         return await svc.create_page(token, target_id, "Flowify Output", str(input_data))
 
-    async def _send_google_drive(self, token: str, config: dict, input_data: dict) -> dict:
+    async def _send_google_drive(
+        self,
+        token: str,
+        config: dict,
+        input_data: dict,
+        service_tokens: dict[str, str],
+    ) -> dict:
         folder_id = config.get("folder_id")
         data_type = input_data.get("type", "TEXT")
         svc = GoogleDriveService()
 
         if data_type == "SINGLE_FILE":
             filename = input_data.get("filename", "output.txt")
-            content = self._to_bytes(input_data.get("content", ""))
             mime_type = input_data.get("mime_type") or "application/octet-stream"
+            content = await self._get_single_file_bytes(input_data, service_tokens)
             return await svc.upload_file(token, filename, content, folder_id, mime_type)
 
         if data_type == "TEXT":
@@ -170,18 +180,16 @@ class OutputNodeStrategy(NodeStrategy):
         if data_type == "FILE_LIST":
             results = []
             for index, item in enumerate(input_data.get("items", []), start=1):
-                filename = item.get("filename") or f"file_{index}"
-                mime_type = item.get("mime_type") or "application/octet-stream"
-                content = item.get("content")
-                if content is None:
-                    filename = self._metadata_filename(filename)
-                    mime_type = "application/json"
-                    content = json.dumps(item)
+                fallback_filename = item.get("filename") or f"file_{index}"
+                filename, mime_type, content = await self._get_file_list_item_upload_data(
+                    fallback_filename,
+                    item, service_tokens
+                )
                 results.append(
                     await svc.upload_file(
                         token,
                         filename,
-                        self._to_bytes(content),
+                        content,
                         folder_id,
                         mime_type,
                     )
@@ -334,6 +342,91 @@ class OutputNodeStrategy(NodeStrategy):
         if filename.endswith(".json"):
             return filename
         return f"{filename}.metadata.json"
+
+    async def _get_single_file_bytes(
+        self,
+        input_data: dict[str, Any],
+        service_tokens: dict[str, str],
+    ) -> bytes:
+        content = input_data.get("content")
+        if content is not None:
+            return self._to_bytes(content)
+
+        url = input_data.get("url")
+        if url:
+            return await self._download_file_from_url(url, service_tokens)
+
+        return b""
+
+    async def _get_file_list_item_upload_data(
+        self,
+        filename: str,
+        item: dict[str, Any],
+        service_tokens: dict[str, str],
+    ) -> tuple[str, str, bytes]:
+        mime_type = item.get("mime_type") or "application/octet-stream"
+        content = item.get("content")
+        if content is not None:
+            return filename, mime_type, self._to_bytes(content)
+
+        url = item.get("url")
+        if url:
+            return filename, mime_type, await self._download_file_from_url(url, service_tokens)
+
+        return self._metadata_filename(filename), "application/json", self._to_bytes(
+            json.dumps(item)
+        )
+
+    async def _download_file_from_url(
+        self,
+        url: str,
+        service_tokens: dict[str, str],
+    ) -> bytes:
+        token = self._resolve_download_token(url, service_tokens)
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                resp = await client.get(url, headers=headers)
+
+            if resp.status_code == 401:
+                raise FlowifyException(
+                    ErrorCode.OAUTH_TOKEN_INVALID,
+                    detail="OAuth 토큰이 만료되었거나 유효하지 않습니다.",
+                    context={"url": url, "status": 401},
+                )
+            if resp.status_code == 403:
+                raise FlowifyException(
+                    ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    detail="파일 다운로드 권한이 없습니다.",
+                    context={"url": url, "status": 403},
+                )
+            if resp.status_code == 404:
+                raise FlowifyException(
+                    ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    detail="다운로드할 파일을 찾을 수 없습니다.",
+                    context={"url": url, "status": 404},
+                )
+
+            resp.raise_for_status()
+            return resp.content
+        except FlowifyException:
+            raise
+        except Exception as e:
+            raise FlowifyException(
+                ErrorCode.EXTERNAL_API_ERROR,
+                detail=f"파일 다운로드 실패: {url}",
+                context={"url": url, "error": str(e)},
+            ) from e
+
+    @staticmethod
+    def _resolve_download_token(url: str, service_tokens: dict[str, str]) -> str | None:
+        lower_url = url.lower()
+        if "canvas" in lower_url:
+            return service_tokens.get("canvas_lms")
+        if "googleapis.com" in lower_url or "drive.google.com" in lower_url:
+            return service_tokens.get("google_drive")
+        return None
 
     @staticmethod
     def _to_bytes(content: bytes | str | None) -> bytes:

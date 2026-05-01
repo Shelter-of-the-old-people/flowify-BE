@@ -1,6 +1,6 @@
 """OutputNodeStrategy v2 tests."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -192,33 +192,96 @@ async def test_google_drive_file_list_uploads_each_item(service_tokens: dict) ->
         ],
     }
 
-    with patch("app.core.nodes.output_node.GoogleDriveService") as mock_drive_class:
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.content = b"%PDF-1.7 binary"
+    mock_response.raise_for_status = MagicMock()
+
+    with (
+        patch("app.core.nodes.output_node.GoogleDriveService") as mock_drive_class,
+        patch("app.core.nodes.output_node.httpx.AsyncClient") as mock_client_class,
+    ):
         mock_drive = mock_drive_class.return_value
         mock_drive.upload_file = AsyncMock(
             side_effect=[
                 {"id": "drive_1", "name": "a.txt"},
-                {"id": "drive_2", "name": "b.pdf.metadata.json"},
+                {"id": "drive_2", "name": "b.pdf"},
             ]
         )
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client_class.return_value = mock_client
 
         result = await strategy.execute(node, input_data, service_tokens)
 
     assert result["detail"]["count"] == 2
     assert result["detail"]["uploaded"] == [
         {"id": "drive_1", "name": "a.txt"},
-        {"id": "drive_2", "name": "b.pdf.metadata.json"},
+        {"id": "drive_2", "name": "b.pdf"},
     ]
     assert mock_drive.upload_file.await_count == 2
     mock_drive.upload_file.assert_any_await(
         service_tokens["google_drive"], "a.txt", b"alpha", "folder_123", "text/plain"
     )
-    metadata_call = mock_drive.upload_file.await_args_list[1]
-    assert metadata_call.args[0:3] == (
+    url_file_call = mock_drive.upload_file.await_args_list[1]
+    assert url_file_call.args == (
         service_tokens["google_drive"],
-        "b.pdf.metadata.json",
-        b'{"filename": "b.pdf", "mime_type": "application/pdf", "size": 20, "url": "https://example.com/b.pdf"}',
+        "b.pdf",
+        b"%PDF-1.7 binary",
+        "folder_123",
+        "application/pdf",
     )
-    assert metadata_call.args[3:] == ("folder_123", "application/json")
+    mock_client.get.assert_awaited_once_with("https://example.com/b.pdf", headers={})
+
+
+async def test_google_drive_single_file_downloads_canvas_url(service_tokens: dict) -> None:
+    strategy = OutputNodeStrategy({})
+    node = _sink_node("google_drive", folder_id="folder_123")
+    input_data = {
+        "type": "SINGLE_FILE",
+        "filename": "lecture.pdf",
+        "mime_type": "application/pdf",
+        "content": None,
+        "url": "https://canvas.kumoh.ac.kr/files/67890/download?token=abc",
+    }
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.content = b"canvas-pdf"
+    mock_response.raise_for_status = MagicMock()
+
+    with (
+        patch("app.core.nodes.output_node.GoogleDriveService") as mock_drive_class,
+        patch("app.core.nodes.output_node.httpx.AsyncClient") as mock_client_class,
+    ):
+        mock_drive = mock_drive_class.return_value
+        mock_drive.upload_file = AsyncMock(return_value={"id": "drive_1", "name": "lecture.pdf"})
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client_class.return_value = mock_client
+
+        result = await strategy.execute(node, input_data, service_tokens)
+
+    assert result == {
+        "status": "sent",
+        "service": "google_drive",
+        "detail": {"id": "drive_1", "name": "lecture.pdf"},
+    }
+    mock_client.get.assert_awaited_once_with(
+        "https://canvas.kumoh.ac.kr/files/67890/download?token=abc",
+        headers={"Authorization": f"Bearer {service_tokens['canvas_lms']}"},
+    )
+    mock_drive.upload_file.assert_awaited_once_with(
+        service_tokens["google_drive"],
+        "lecture.pdf",
+        b"canvas-pdf",
+        "folder_123",
+        "application/pdf",
+    )
 
 
 async def test_google_drive_spreadsheet_data_uploads_csv(service_tokens: dict) -> None:
