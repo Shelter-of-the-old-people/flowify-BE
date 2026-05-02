@@ -166,10 +166,22 @@ class OutputNodeStrategy(NodeStrategy):
         svc = GoogleDriveService()
 
         if data_type == "SINGLE_FILE":
-            filename = input_data.get("filename", "output.txt")
+            raw_filename = input_data.get("filename", "output.txt")
+            destination_folder_id, filename = await self._resolve_google_drive_destination(
+                svc,
+                token,
+                folder_id,
+                raw_filename,
+            )
             mime_type = input_data.get("mime_type") or "application/octet-stream"
             content = await self._get_single_file_bytes(input_data, service_tokens)
-            return await svc.upload_file(token, filename, content, folder_id, mime_type)
+            return await svc.upload_file(
+                token,
+                filename,
+                content,
+                destination_folder_id,
+                mime_type,
+            )
 
         if data_type == "TEXT":
             content = self._to_bytes(input_data.get("content", ""))
@@ -180,7 +192,15 @@ class OutputNodeStrategy(NodeStrategy):
         if data_type == "FILE_LIST":
             results = []
             for index, item in enumerate(input_data.get("items", []), start=1):
-                fallback_filename = item.get("filename") or f"file_{index}"
+                raw_filename = item.get("filename") or f"file_{index}"
+                destination_folder_id, fallback_filename = (
+                    await self._resolve_google_drive_destination(
+                        svc,
+                        token,
+                        folder_id,
+                        raw_filename,
+                    )
+                )
                 filename, mime_type, content = await self._get_file_list_item_upload_data(
                     fallback_filename,
                     item, service_tokens
@@ -190,7 +210,7 @@ class OutputNodeStrategy(NodeStrategy):
                         token,
                         filename,
                         content,
-                        folder_id,
+                        destination_folder_id,
                         mime_type,
                     )
                 )
@@ -427,6 +447,25 @@ class OutputNodeStrategy(NodeStrategy):
         if "googleapis.com" in lower_url or "drive.google.com" in lower_url:
             return service_tokens.get("google_drive")
         return None
+
+    async def _resolve_google_drive_destination(
+        self,
+        svc: GoogleDriveService,
+        token: str,
+        root_folder_id: str | None,
+        filename: str,
+    ) -> tuple[str | None, str]:
+        normalized_filename = str(filename).replace("\\", "/")
+        path_segments = [segment.strip() for segment in normalized_filename.split("/") if segment.strip()]
+        if len(path_segments) <= 1:
+            return root_folder_id, path_segments[0] if path_segments else filename
+
+        destination_folder_id = await svc.ensure_folder_path(
+            token,
+            root_folder_id,
+            path_segments[:-1],
+        )
+        return destination_folder_id, path_segments[-1]
 
     @staticmethod
     def _to_bytes(content: bytes | str | None) -> bytes:

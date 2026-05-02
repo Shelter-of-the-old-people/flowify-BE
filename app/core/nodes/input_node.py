@@ -9,8 +9,6 @@ runtime_source의 service/mode/target 정보를 바탕으로 외부 서비스에
 import logging
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 from app.common.errors import ErrorCode, FlowifyException
 from app.core.nodes.base import NodeStrategy
 from app.services.integrations.canvas_lms import CanvasLmsService
@@ -18,6 +16,8 @@ from app.services.integrations.gmail import GmailService
 from app.services.integrations.google_drive import GoogleDriveService
 from app.services.integrations.google_sheets import GoogleSheetsService
 from app.services.integrations.slack import SlackService
+
+logger = logging.getLogger(__name__)
 
 # Phase 1 지원 source 맵
 SUPPORTED_SOURCES: dict[str, set[str]] = {
@@ -327,7 +327,7 @@ class InputNodeStrategy(NodeStrategy):
             }
 
         if mode == "term_all_files":
-            courses = await svc.get_active_courses(token)
+            courses = await svc.get_courses(token, include_completed=True)
             matching = [
                 c for c in courses
                 if c.get("term", {}).get("name") == target and c.get("name")

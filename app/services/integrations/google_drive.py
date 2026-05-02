@@ -5,6 +5,7 @@ from app.services.integrations.base import BaseIntegrationService
 
 DRIVE_API = "https://www.googleapis.com/drive/v3"
 DRIVE_UPLOAD_API = "https://www.googleapis.com/upload/drive/v3"
+DRIVE_FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
 
 
 class GoogleDriveService(BaseIntegrationService):
@@ -94,4 +95,75 @@ class GoogleDriveService(BaseIntegrationService):
             content=body,
             headers={"Content-Type": f"multipart/related; boundary={boundary}"},
             params={"uploadType": "multipart", "fields": "id,name,mimeType,webViewLink"},
+        )
+
+    async def ensure_folder_path(
+        self,
+        token: str,
+        parent_folder_id: str | None,
+        folder_names: list[str],
+    ) -> str | None:
+        """Ensure a nested folder path exists and return the deepest folder id."""
+        current_parent_id = parent_folder_id
+        for folder_name in folder_names:
+            if not folder_name:
+                continue
+
+            existing_folder = await self._find_folder(token, folder_name, current_parent_id)
+            if existing_folder:
+                current_parent_id = existing_folder["id"]
+                continue
+
+            created_folder = await self._create_folder(token, folder_name, current_parent_id)
+            current_parent_id = created_folder["id"]
+
+        return current_parent_id
+
+    async def _find_folder(
+        self,
+        token: str,
+        folder_name: str,
+        parent_folder_id: str | None,
+    ) -> dict | None:
+        escaped_name = folder_name.replace("'", r"\'")
+        query_parts = [
+            "trashed=false",
+            f"mimeType='{DRIVE_FOLDER_MIME_TYPE}'",
+            f"name='{escaped_name}'",
+        ]
+        if parent_folder_id:
+            query_parts.append(f"'{parent_folder_id}' in parents")
+
+        data = await self._request(
+            "GET",
+            f"{DRIVE_API}/files",
+            token,
+            params={
+                "q": " and ".join(query_parts),
+                "pageSize": 1,
+                "fields": "files(id,name,mimeType)",
+            },
+        )
+        files = data.get("files", [])
+        return files[0] if files else None
+
+    async def _create_folder(
+        self,
+        token: str,
+        folder_name: str,
+        parent_folder_id: str | None,
+    ) -> dict:
+        metadata: dict[str, object] = {
+            "name": folder_name,
+            "mimeType": DRIVE_FOLDER_MIME_TYPE,
+        }
+        if parent_folder_id:
+            metadata["parents"] = [parent_folder_id]
+
+        return await self._request(
+            "POST",
+            f"{DRIVE_API}/files",
+            token,
+            json=metadata,
+            params={"fields": "id,name,mimeType,webViewLink"},
         )

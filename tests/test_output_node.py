@@ -236,6 +236,57 @@ async def test_google_drive_file_list_uploads_each_item(service_tokens: dict) ->
     mock_client.get.assert_awaited_once_with("https://example.com/b.pdf", headers={})
 
 
+async def test_google_drive_file_list_creates_course_subfolder(service_tokens: dict) -> None:
+    strategy = OutputNodeStrategy({})
+    node = _sink_node("google_drive", folder_id="folder_root")
+    input_data = {
+        "type": "FILE_LIST",
+        "items": [
+            {
+                "filename": "데이터베이스/Week01_Introduction.pdf",
+                "mime_type": "application/pdf",
+                "url": "https://canvas.kumoh.ac.kr/files/67890/download?token=abc",
+            }
+        ],
+    }
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.content = b"canvas-pdf"
+    mock_response.raise_for_status = MagicMock()
+
+    with (
+        patch("app.core.nodes.output_node.GoogleDriveService") as mock_drive_class,
+        patch("app.core.nodes.output_node.httpx.AsyncClient") as mock_client_class,
+    ):
+        mock_drive = mock_drive_class.return_value
+        mock_drive.ensure_folder_path = AsyncMock(return_value="course_folder_1")
+        mock_drive.upload_file = AsyncMock(
+            return_value={"id": "drive_1", "name": "Week01_Introduction.pdf"}
+        )
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client_class.return_value = mock_client
+
+        result = await strategy.execute(node, input_data, service_tokens)
+
+    assert result["detail"]["count"] == 1
+    mock_drive.ensure_folder_path.assert_awaited_once_with(
+        service_tokens["google_drive"],
+        "folder_root",
+        ["데이터베이스"],
+    )
+    mock_drive.upload_file.assert_awaited_once_with(
+        service_tokens["google_drive"],
+        "Week01_Introduction.pdf",
+        b"canvas-pdf",
+        "course_folder_1",
+        "application/pdf",
+    )
+
+
 async def test_google_drive_single_file_downloads_canvas_url(service_tokens: dict) -> None:
     strategy = OutputNodeStrategy({})
     node = _sink_node("google_drive", folder_id="folder_123")

@@ -11,7 +11,6 @@ from app.common.errors import ErrorCode, FlowifyException
 from app.core.nodes.input_node import InputNodeStrategy
 from app.services.integrations.canvas_lms import CanvasLmsService, _safe_filename
 
-
 # ── 헬퍼 ──
 
 
@@ -121,6 +120,35 @@ class TestCanvasLmsService:
             result = await svc.get_active_courses("test-token")
 
         assert len(result) == 2
+        assert mock_client.get.await_args.kwargs["params"] == {
+            "enrollment_state[]": "active",
+            "include[]": "term",
+            "per_page": 100,
+        }
+
+    async def test_get_courses_include_completed(self):
+        svc = CanvasLmsService()
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = []
+        mock_resp.headers = {"link": ""}
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("app.services.integrations.canvas_lms.httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_class.return_value = mock_client
+
+            await svc.get_courses("test-token", include_completed=True)
+
+        assert mock_client.get.await_args.kwargs["params"] == {
+            "enrollment_state[]": ["active", "completed"],
+            "include[]": "term",
+            "per_page": 100,
+        }
 
     async def test_paginated_get_follows_next_link(self):
         """Link 헤더의 rel=next를 따라 페이지네이션을 처리한다."""
@@ -303,7 +331,7 @@ class TestInputNodeCanvasLms:
 
         with patch("app.core.nodes.input_node.CanvasLmsService") as mock_cls:
             mock_svc = mock_cls.return_value
-            mock_svc.get_active_courses = AsyncMock(return_value=courses)
+            mock_svc.get_courses = AsyncMock(return_value=courses)
             mock_svc.get_course_files = AsyncMock(return_value=[SAMPLE_FILES[0]])
             mock_svc.to_file_item = CanvasLmsService.to_file_item
 
@@ -322,7 +350,7 @@ class TestInputNodeCanvasLms:
 
         with patch("app.core.nodes.input_node.CanvasLmsService") as mock_cls:
             mock_svc = mock_cls.return_value
-            mock_svc.get_active_courses = AsyncMock(return_value=[
+            mock_svc.get_courses = AsyncMock(return_value=[
                 {"id": 1, "name": "과목A", "term": {"name": "2026-1학기"}},
             ])
 
