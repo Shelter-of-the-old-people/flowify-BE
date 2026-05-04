@@ -144,25 +144,37 @@ async def test_llm_node_process_spreadsheet_data_output():
     )
 
 
-def test_extract_text_from_single_file_includes_metadata():
-    from app.core.nodes.llm_node import LLMNodeStrategy
+async def test_llm_node_text_output_preserves_file_metadata():
+    with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
+        mock_instance = mock_svc_cls.return_value
+        mock_instance.process = AsyncMock(return_value="공유용 결과")
 
-    result = LLMNodeStrategy._extract_text_from_canonical(
-        {
-            "type": "SINGLE_FILE",
-            "filename": "report.txt",
-            "mime_type": "text/plain",
-            "url": "https://drive.google.com/file/d/file_1",
-            "content": "문서 본문",
-        }
-    )
+        from app.core.nodes.llm_node import LLMNodeStrategy
 
-    assert result == (
-        "Filename: report.txt\n"
-        "MIME Type: text/plain\n"
-        "Source URL: https://drive.google.com/file/d/file_1\n\n"
-        "문서 본문"
-    )
+        node = LLMNodeStrategy(config={"action": "process", "prompt": "정리해줘"})
+        node._llm_service = mock_instance
+
+        result = await node.execute(
+            node=_node(runtime_config={"action": "process", "prompt": "정리해줘"}),
+            input_data={
+                "type": "SINGLE_FILE",
+                "file_id": "file_latest",
+                "filename": "latest.pdf",
+                "mime_type": "application/pdf",
+                "url": "https://drive.google.com/file/d/file_latest",
+                "content": "입력 데이터",
+            },
+            service_tokens={},
+        )
+
+    assert result == {
+        "type": "TEXT",
+        "content": "공유용 결과",
+        "file_id": "file_latest",
+        "filename": "latest.pdf",
+        "mime_type": "application/pdf",
+        "url": "https://drive.google.com/file/d/file_latest",
+    }
 
 
 async def test_llm_node_default_action_is_process():
@@ -231,6 +243,69 @@ async def test_extract_text_from_spreadsheet():
 
     call_args = mock_instance.summarize.call_args[0][0]
     assert "홍길동" in call_args
+
+
+async def test_extract_text_from_single_file_includes_metadata():
+    with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
+        mock_instance = mock_svc_cls.return_value
+        mock_instance.summarize = AsyncMock(return_value="요약")
+
+        from app.core.nodes.llm_node import LLMNodeStrategy
+
+        node = LLMNodeStrategy(config={"action": "summarize"})
+        node._llm_service = mock_instance
+
+        await node.execute(
+            node=_node(runtime_config={"action": "summarize"}),
+            input_data={
+                "type": "SINGLE_FILE",
+                "filename": "latest.pdf",
+                "mime_type": "application/pdf",
+                "created_time": "2026-05-04T12:00:00Z",
+                "url": "https://drive.google.com/file/d/file_latest",
+                "content": "문서 본문",
+            },
+            service_tokens={},
+        )
+
+    call_args = mock_instance.summarize.call_args[0][0]
+    assert "Filename: latest.pdf" in call_args
+    assert "Created Time: 2026-05-04T12:00:00Z" in call_args
+    assert "Source URL: https://drive.google.com/file/d/file_latest" in call_args
+    assert "문서 본문" in call_args
+
+
+async def test_extract_text_from_file_list_includes_metadata():
+    with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
+        mock_instance = mock_svc_cls.return_value
+        mock_instance.summarize = AsyncMock(return_value="요약")
+
+        from app.core.nodes.llm_node import LLMNodeStrategy
+
+        node = LLMNodeStrategy(config={"action": "summarize"})
+        node._llm_service = mock_instance
+
+        await node.execute(
+            node=_node(runtime_config={"action": "summarize"}),
+            input_data={
+                "type": "FILE_LIST",
+                "items": [
+                    {
+                        "filename": "latest.pdf",
+                        "mime_type": "application/pdf",
+                        "size": 128,
+                        "created_time": "2026-05-04T12:00:00Z",
+                        "url": "https://drive.google.com/file/d/file_latest",
+                    }
+                ],
+            },
+            service_tokens={},
+        )
+
+    call_args = mock_instance.summarize.call_args[0][0]
+    assert "- Filename: latest.pdf" in call_args
+    assert "MIME Type: application/pdf" in call_args
+    assert "Source URL: https://drive.google.com/file/d/file_latest" in call_args
 
 
 # ── validate ──

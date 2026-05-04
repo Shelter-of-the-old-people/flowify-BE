@@ -23,7 +23,7 @@ class GoogleDriveService(BaseIntegrationService):
         params = {
             "q": query,
             "pageSize": max_results,
-            "fields": "files(id,name,mimeType,size,modifiedTime)",
+            "fields": "files(id,name,mimeType,size,createdTime,modifiedTime)",
         }
         if order_by:
             params["orderBy"] = order_by
@@ -66,11 +66,18 @@ class GoogleDriveService(BaseIntegrationService):
                 params={"alt": "media"},
             )
 
+        if isinstance(content, dict) and isinstance(content.get("text"), str):
+            normalized_content = content["text"]
+        elif isinstance(content, str):
+            normalized_content = content
+        else:
+            normalized_content = str(content)
+
         return {
             "id": meta.get("id"),
             "name": meta.get("name"),
             "mimeType": mime,
-            "content": content if isinstance(content, str) else str(content),
+            "content": normalized_content,
         }
 
     async def upload_file(

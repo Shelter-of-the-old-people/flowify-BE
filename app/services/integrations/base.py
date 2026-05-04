@@ -9,13 +9,13 @@ logger = logging.getLogger(__name__)
 
 
 class BaseIntegrationService:
-    """외부 서비스 연동 공통 베이스 클래스.
+    """Shared base for external integration services.
 
-    재시도 로직 (EXR-01):
-        외부 API 호출 실패 시 최대 3회, 지수 백오프 (1s → 2s → 4s).
-    에러 래핑:
-        OAuth 401 → OAUTH_TOKEN_INVALID
-        기타 실패 → EXTERNAL_API_ERROR
+    Retry policy (EXR-01):
+        Retry up to three times with exponential backoff (1s, 2s, 4s).
+    Error mapping:
+        OAuth 401 -> OAUTH_TOKEN_INVALID
+        Other failures -> EXTERNAL_API_ERROR
     """
 
     MAX_RETRIES = 3
@@ -33,7 +33,7 @@ class BaseIntegrationService:
         headers: dict | None = None,
         timeout: float = 30.0,
     ) -> dict:
-        """인증 헤더 포함 HTTP 요청 + 재시도 + 에러 래핑."""
+        """Send an authenticated HTTP request with retry/error handling."""
         req_headers = {}
         if token:
             req_headers["Authorization"] = f"Bearer {token}"
@@ -72,15 +72,19 @@ class BaseIntegrationService:
             except httpx.HTTPStatusError as e:
                 last_exc = e
                 if e.response.status_code < 500:
-                    break  # 4xx는 재시도하지 않음
+                    break  # Do not retry client errors.
             except (httpx.ConnectError, httpx.ReadTimeout) as e:
                 last_exc = e
 
-            # 지수 백오프 대기
+            # Exponential backoff between retry attempts.
             if attempt < BaseIntegrationService.MAX_RETRIES - 1:
                 wait = BaseIntegrationService.BASE_BACKOFF * (2**attempt)
                 logger.warning(
-                    f"외부 API 재시도 {attempt + 1}/{BaseIntegrationService.MAX_RETRIES}: {url} ({wait}s 대기)"
+                    "External API retry %s/%s: %s (waiting %ss)",
+                    attempt + 1,
+                    BaseIntegrationService.MAX_RETRIES,
+                    url,
+                    wait,
                 )
                 await asyncio.sleep(wait)
 

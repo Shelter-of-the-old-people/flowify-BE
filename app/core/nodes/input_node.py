@@ -1,9 +1,8 @@
-"""InputNodeStrategy — runtime_source 기반 외부 데이터 수집.
+"""Input node strategy for runtime source collection.
 
-runtime_source의 service/mode/target 정보를 바탕으로 외부 서비스에서
-데이터를 수집하고, canonical_input_type에 맞는 canonical payload로 반환한다.
-
-참조: FASTAPI_IMPLEMENTATION_GUIDE.md 섹션 5
+Reads ``runtime_source`` metadata from a workflow node, fetches data from the
+matching external service, and returns a canonical payload that matches the
+declared input type.
 """
 
 import logging
@@ -19,7 +18,7 @@ from app.services.integrations.slack import SlackService
 
 logger = logging.getLogger(__name__)
 
-# Phase 1 지원 source 맵
+# Phase 1 supported source modes only.
 SUPPORTED_SOURCES: dict[str, set[str]] = {
     "google_drive": {
         "single_file",
@@ -43,7 +42,7 @@ SUPPORTED_SOURCES: dict[str, set[str]] = {
 
 
 class InputNodeStrategy(NodeStrategy):
-    """입력 노드 — 외부 서비스에서 데이터를 수집하여 canonical payload를 반환."""
+    """Fetch external source data and normalize it into canonical payloads."""
 
     async def execute(
         self,
@@ -53,7 +52,7 @@ class InputNodeStrategy(NodeStrategy):
     ) -> dict[str, Any]:
         runtime_source = node.get("runtime_source")
         if not runtime_source:
-            # transition fallback: config 기반
+            # Transitional fallback for older config-based nodes.
             return {"type": "TEXT", "content": self.config.get("data", "")}
 
         service = runtime_source["service"]
@@ -65,37 +64,38 @@ class InputNodeStrategy(NodeStrategy):
         if not token and service not in ("web_crawl",):
             raise FlowifyException(
                 ErrorCode.OAUTH_TOKEN_INVALID,
-                detail=f"'{service}' 서비스 토큰이 없습니다.",
+                detail=f"'{service}' 서비스의 토큰이 없습니다.",
             )
 
         if service == "google_drive":
             return await self._fetch_google_drive(token, mode, target, canonical_type)
-        elif service == "gmail":
+        if service == "gmail":
             return await self._fetch_gmail(token, mode, target, canonical_type)
-        elif service == "google_sheets":
+        if service == "google_sheets":
             return await self._fetch_google_sheets(token, mode, target, canonical_type)
-        elif service == "slack":
+        if service == "slack":
             return await self._fetch_slack(token, mode, target)
-        elif service == "canvas_lms":
+        if service == "canvas_lms":
             return await self._fetch_canvas_lms(token, mode, target)
-        else:
-            raise FlowifyException(
-                ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
-                detail=f"service={service}, mode={mode} is not supported in current runtime phase",
-            )
+
+        raise FlowifyException(
+            ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
+            detail=f"service={service}, mode={mode} is not supported in current runtime phase",
+        )
 
     def validate(self, node: dict[str, Any]) -> bool:
-        rs = node.get("runtime_source")
-        if not rs:
+        runtime_source = node.get("runtime_source")
+        if not runtime_source:
             return False
-        service = rs.get("service", "")
-        mode = rs.get("mode", "")
+
+        service = runtime_source.get("service", "")
+        mode = runtime_source.get("mode", "")
         supported_modes = SUPPORTED_SOURCES.get(service)
         if supported_modes is None:
             return False
         return mode in supported_modes
 
-    # ── Google Drive ──
+    # Google Drive
 
     async def _fetch_google_drive(
         self, token: str, mode: str, target: str, canonical_type: str
@@ -106,6 +106,7 @@ class InputNodeStrategy(NodeStrategy):
             file_data = await svc.download_file(token, target)
             return {
                 "type": "SINGLE_FILE",
+                "file_id": target,
                 "filename": file_data.get("name", ""),
                 "content": file_data.get("content", ""),
                 "mime_type": file_data.get("mimeType", ""),
@@ -120,15 +121,28 @@ class InputNodeStrategy(NodeStrategy):
                 order_by="createdTime desc",
             )
             if not files:
-                return {"type": "SINGLE_FILE", "filename": "", "content": ""}
-            f = files[0]
-            file_data = await svc.download_file(token, f["id"])
+                return {
+                    "type": "SINGLE_FILE",
+                    "file_id": "",
+                    "filename": "",
+                    "content": "",
+                    "mime_type": "",
+                    "url": "",
+                    "created_time": "",
+                    "modified_time": "",
+                }
+
+            latest_file = files[0]
+            file_data = await svc.download_file(token, latest_file["id"])
             return {
                 "type": "SINGLE_FILE",
-                "filename": f.get("name", ""),
+                "file_id": latest_file["id"],
+                "filename": latest_file.get("name", ""),
                 "content": file_data.get("content", ""),
-                "mime_type": f.get("mimeType", ""),
-                "url": f"https://drive.google.com/file/d/{f['id']}",
+                "mime_type": latest_file.get("mimeType", ""),
+                "created_time": latest_file.get("createdTime", ""),
+                "modified_time": latest_file.get("modifiedTime", ""),
+                "url": f"https://drive.google.com/file/d/{latest_file['id']}",
             }
 
         if mode == "folder_all_files":
@@ -137,12 +151,15 @@ class InputNodeStrategy(NodeStrategy):
                 "type": "FILE_LIST",
                 "items": [
                     {
-                        "filename": f.get("name", ""),
-                        "mime_type": f.get("mimeType", ""),
-                        "size": f.get("size"),
-                        "url": f"https://drive.google.com/file/d/{f['id']}",
+                        "file_id": drive_file.get("id", ""),
+                        "filename": drive_file.get("name", ""),
+                        "mime_type": drive_file.get("mimeType", ""),
+                        "size": drive_file.get("size"),
+                        "created_time": drive_file.get("createdTime", ""),
+                        "modified_time": drive_file.get("modifiedTime", ""),
+                        "url": f"https://drive.google.com/file/d/{drive_file['id']}",
                     }
-                    for f in files
+                    for drive_file in files
                 ],
             }
 
@@ -151,7 +168,7 @@ class InputNodeStrategy(NodeStrategy):
             detail=f"service=google_drive, mode={mode} is not supported",
         )
 
-    # ── Gmail ──
+    # Gmail
 
     async def _fetch_gmail(
         self, token: str, mode: str, target: str, canonical_type: str
@@ -207,12 +224,12 @@ class InputNodeStrategy(NodeStrategy):
                 "type": "EMAIL_LIST",
                 "items": [
                     {
-                        "subject": m.get("subject", ""),
-                        "from": m.get("from", ""),
-                        "date": m.get("date", ""),
-                        "body": m.get("body", ""),
+                        "subject": msg.get("subject", ""),
+                        "from": msg.get("from", ""),
+                        "date": msg.get("date", ""),
+                        "body": msg.get("body", ""),
                     }
-                    for m in msgs
+                    for msg in msgs
                 ],
             }
 
@@ -254,7 +271,7 @@ class InputNodeStrategy(NodeStrategy):
             for attachment in attachments
         ]
 
-    # ── Google Sheets ──
+    # Google Sheets
 
     async def _fetch_google_sheets(
         self, token: str, mode: str, target: str, canonical_type: str
@@ -262,7 +279,7 @@ class InputNodeStrategy(NodeStrategy):
         svc = GoogleSheetsService()
 
         if mode in ("sheet_all", "new_row", "row_updated"):
-            # target = spreadsheet_id, 기본 시트 "Sheet1"
+            # target = spreadsheet_id, default sheet name is "Sheet1"
             values = await svc.read_range(token, target, "Sheet1")
             headers = values[0] if values else []
             rows = values[1:] if len(values) > 1 else []
@@ -278,12 +295,11 @@ class InputNodeStrategy(NodeStrategy):
             detail=f"service=google_sheets, mode={mode} is not supported",
         )
 
-    # ── Slack ──
+    # Slack
 
     async def _fetch_slack(self, token: str, mode: str, target: str) -> dict[str, Any]:
         if mode == "channel_messages":
             svc = SlackService()
-            # conversations.history API 호출
             data = await svc._request(
                 "GET",
                 "https://slack.com/api/conversations.history",
@@ -291,7 +307,7 @@ class InputNodeStrategy(NodeStrategy):
                 params={"channel": target, "limit": 20},
             )
             messages = data.get("messages", [])
-            content = "\n".join(m.get("text", "") for m in messages)
+            content = "\n".join(message.get("text", "") for message in messages)
             return {"type": "TEXT", "content": content}
 
         raise FlowifyException(
@@ -299,7 +315,7 @@ class InputNodeStrategy(NodeStrategy):
             detail=f"service=slack, mode={mode} is not supported",
         )
 
-    # ── Canvas LMS ──
+    # Canvas LMS
 
     async def _fetch_canvas_lms(
         self, token: str, mode: str, target: str
@@ -310,12 +326,12 @@ class InputNodeStrategy(NodeStrategy):
             files = await svc.get_course_files(token, target)
             return {
                 "type": "FILE_LIST",
-                "items": [svc.to_file_item(f) for f in files],
+                "items": [svc.to_file_item(file_item) for file_item in files],
             }
 
         if mode == "course_new_file":
-            f = await svc.get_course_latest_file(token, target)
-            if not f:
+            latest_file = await svc.get_course_latest_file(token, target)
+            if not latest_file:
                 return {
                     "type": "SINGLE_FILE",
                     "filename": "",
@@ -325,17 +341,18 @@ class InputNodeStrategy(NodeStrategy):
                 }
             return {
                 "type": "SINGLE_FILE",
-                "filename": f.get("display_name", f.get("filename", "")),
+                "filename": latest_file.get("display_name", latest_file.get("filename", "")),
                 "content": None,
-                "mime_type": f.get("content-type", "application/octet-stream"),
-                "url": f.get("url", ""),
+                "mime_type": latest_file.get("content-type", "application/octet-stream"),
+                "url": latest_file.get("url", ""),
             }
 
         if mode == "term_all_files":
             courses = await svc.get_courses(token, include_completed=True)
             matching = [
-                c for c in courses
-                if c.get("term", {}).get("name") == target and c.get("name")
+                course
+                for course in courses
+                if course.get("term", {}).get("name") == target and course.get("name")
             ]
             if not matching:
                 raise FlowifyException(
@@ -348,11 +365,14 @@ class InputNodeStrategy(NodeStrategy):
                 try:
                     files = await svc.get_course_files(token, str(course["id"]))
                     all_items.extend(
-                        svc.to_file_item(f, course_name=course["name"]) for f in files
+                        svc.to_file_item(file_item, course_name=course["name"])
+                        for file_item in files
                     )
                 except Exception as e:
                     logger.warning(
-                        "Canvas LMS 과목 '%s' 파일 조회 실패: %s", course.get("name"), e
+                        "Canvas LMS 과목 '%s' 파일 조회 실패: %s",
+                        course.get("name"),
+                        e,
                     )
                     continue
             return {"type": "FILE_LIST", "items": all_items}

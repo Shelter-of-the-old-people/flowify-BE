@@ -127,6 +127,38 @@ async def test_notion_create_page_text(service_tokens: dict) -> None:
     )
 
 
+async def test_notion_create_page_uses_title_template(service_tokens: dict) -> None:
+    strategy = OutputNodeStrategy({})
+    node = _sink_node(
+        "notion",
+        target_type="page",
+        target_id="page_123",
+        title_template="업로드 기록 - {{filename}}",
+    )
+    input_data = {
+        "type": "TEXT",
+        "content": "Summarized content",
+        "filename": "latest.pdf",
+    }
+
+    with patch("app.core.nodes.output_node.NotionService") as mock_notion_class:
+        mock_notion = mock_notion_class.return_value
+        mock_notion.create_page = AsyncMock(return_value={"id": "notion_page"})
+
+        result = await strategy.execute(node, input_data, service_tokens)
+
+    assert result == {
+        "status": "sent",
+        "service": "notion",
+        "detail": {"id": "notion_page"},
+    }
+    create_args = mock_notion.create_page.await_args.args
+    assert create_args[0] == service_tokens["notion"]
+    assert create_args[1] == "page_123"
+    assert create_args[2] == "업로드 기록 - latest.pdf"
+    assert create_args[3] == "Summarized content"
+
+
 async def test_google_calendar_update_schedule_data(service_tokens: dict) -> None:
     strategy = OutputNodeStrategy({})
     node = _sink_node(
