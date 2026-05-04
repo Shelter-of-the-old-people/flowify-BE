@@ -81,6 +81,90 @@ async def test_llm_node_process_default():
     mock_instance.process.assert_called_once()
 
 
+async def test_llm_node_process_spreadsheet_data_output():
+    with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
+        mock_instance = mock_svc_cls.return_value
+        mock_instance.process_json = AsyncMock(
+            return_value={
+                "headers": ["document_name", "summary", "highlights", "source_url"],
+                "rows": [
+                    [
+                        "report.txt",
+                        "핵심 요약",
+                        "주요 포인트",
+                        "https://drive.google.com/file/d/file_1",
+                    ]
+                ],
+            }
+        )
+
+        from app.core.nodes.llm_node import LLMNodeStrategy
+
+        node = LLMNodeStrategy(config={"action": "process", "prompt": "시트 형식으로 정리해줘"})
+        node._llm_service = mock_instance
+
+        result = await node.execute(
+            node=_node(
+                runtime_config={
+                    "action": "process",
+                    "prompt": "시트 형식으로 정리해줘",
+                    "output_data_type": "SPREADSHEET_DATA",
+                }
+            ),
+            input_data={
+                "type": "SINGLE_FILE",
+                "content": "문서 본문",
+                "filename": "report.txt",
+                "mime_type": "text/plain",
+                "url": "https://drive.google.com/file/d/file_1",
+            },
+            service_tokens={},
+        )
+
+    assert result == {
+        "type": "SPREADSHEET_DATA",
+        "headers": ["document_name", "summary", "highlights", "source_url"],
+        "rows": [
+            [
+                "report.txt",
+                "핵심 요약",
+                "주요 포인트",
+                "https://drive.google.com/file/d/file_1",
+            ]
+        ],
+    }
+    mock_instance.process_json.assert_called_once_with(
+        "시트 형식으로 정리해줘",
+        context=(
+            "Filename: report.txt\n"
+            "MIME Type: text/plain\n"
+            "Source URL: https://drive.google.com/file/d/file_1\n\n"
+            "문서 본문"
+        ),
+    )
+
+
+def test_extract_text_from_single_file_includes_metadata():
+    from app.core.nodes.llm_node import LLMNodeStrategy
+
+    result = LLMNodeStrategy._extract_text_from_canonical(
+        {
+            "type": "SINGLE_FILE",
+            "filename": "report.txt",
+            "mime_type": "text/plain",
+            "url": "https://drive.google.com/file/d/file_1",
+            "content": "문서 본문",
+        }
+    )
+
+    assert result == (
+        "Filename: report.txt\n"
+        "MIME Type: text/plain\n"
+        "Source URL: https://drive.google.com/file/d/file_1\n\n"
+        "문서 본문"
+    )
+
+
 async def test_llm_node_default_action_is_process():
     with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
         mock_instance = mock_svc_cls.return_value

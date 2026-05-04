@@ -12,19 +12,26 @@ class GoogleDriveService(BaseIntegrationService):
     """Google Drive API integration service."""
 
     async def list_files(
-        self, token: str, folder_id: str | None = None, max_results: int = 50
+        self,
+        token: str,
+        folder_id: str | None = None,
+        max_results: int = 50,
+        order_by: str | None = None,
     ) -> list[dict]:
         """List files in a Drive folder."""
         query = f"'{folder_id}' in parents and trashed=false" if folder_id else "trashed=false"
+        params = {
+            "q": query,
+            "pageSize": max_results,
+            "fields": "files(id,name,mimeType,size,modifiedTime)",
+        }
+        if order_by:
+            params["orderBy"] = order_by
         data = await self._request(
             "GET",
             f"{DRIVE_API}/files",
             token,
-            params={
-                "q": query,
-                "pageSize": max_results,
-                "fields": "files(id,name,mimeType,size,modifiedTime)",
-            },
+            params=params,
         )
         return data.get("files", [])
 

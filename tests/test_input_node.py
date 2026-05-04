@@ -103,6 +103,50 @@ async def test_google_drive_folder_all_files(service_tokens: dict) -> None:
     )
 
 
+async def test_google_drive_folder_new_file_reads_latest_file(service_tokens: dict) -> None:
+    """folder_new_file는 최신 생성 파일 1건을 읽습니다."""
+    strategy = InputNodeStrategy({})
+    node = _source_node("google_drive", "folder_new_file", "folder_123")
+
+    with patch("app.core.nodes.input_node.GoogleDriveService") as mock_drive_class:
+        mock_drive = mock_drive_class.return_value
+        mock_drive.list_files = AsyncMock(
+            return_value=[
+                {
+                    "id": "file_latest",
+                    "name": "latest.txt",
+                    "mimeType": "text/plain",
+                }
+            ]
+        )
+        mock_drive.download_file = AsyncMock(
+            return_value={
+                "name": "latest.txt",
+                "content": "latest content",
+                "mimeType": "text/plain",
+            }
+        )
+
+        result = await strategy.execute(node, None, service_tokens)
+
+    assert result == {
+        "type": "SINGLE_FILE",
+        "filename": "latest.txt",
+        "content": "latest content",
+        "mime_type": "text/plain",
+        "url": "https://drive.google.com/file/d/file_latest",
+    }
+    mock_drive.list_files.assert_awaited_once_with(
+        service_tokens["google_drive"],
+        folder_id="folder_123",
+        max_results=1,
+        order_by="createdTime desc",
+    )
+    mock_drive.download_file.assert_awaited_once_with(
+        service_tokens["google_drive"], "file_latest"
+    )
+
+
 # ── Gmail ────────────────────────────────────────────────────────
 
 

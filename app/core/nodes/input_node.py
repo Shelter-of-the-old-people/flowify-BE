@@ -113,7 +113,12 @@ class InputNodeStrategy(NodeStrategy):
             }
 
         if mode in ("file_changed", "new_file", "folder_new_file"):
-            files = await svc.list_files(token, folder_id=target, max_results=1)
+            files = await svc.list_files(
+                token,
+                folder_id=target,
+                max_results=1,
+                order_by="createdTime desc",
+            )
             if not files:
                 return {"type": "SINGLE_FILE", "filename": "", "content": ""}
             f = files[0]
