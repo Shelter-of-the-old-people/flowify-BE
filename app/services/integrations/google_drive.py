@@ -27,7 +27,6 @@ class GoogleDriveService(BaseIntegrationService):
         }
         if order_by:
             params["orderBy"] = order_by
-
         data = await self._request(
             "GET",
             f"{DRIVE_API}/files",

@@ -44,6 +44,28 @@ class LLMService:
             chain = template | self._llm | StrOutputParser()
             return await self._invoke_with_retry(chain, {"prompt": prompt})
 
+    async def process_json(self, prompt: str, context: str | None = None) -> dict:
+        """JSON 구조 출력을 기대하는 범용 프롬프트 처리."""
+        if context:
+            template = ChatPromptTemplate.from_messages(
+                [
+                    ("system", "주어진 컨텍스트를 참고하여 사용자의 요청을 처리하세요. 반드시 JSON만 반환하세요."),
+                    ("human", "컨텍스트:\n{context}\n\n요청:\n{prompt}"),
+                ]
+            )
+            variables = {"prompt": prompt, "context": context}
+        else:
+            template = ChatPromptTemplate.from_messages(
+                [
+                    ("system", "사용자의 요청을 처리하세요. 반드시 JSON만 반환하세요."),
+                    ("human", "{prompt}"),
+                ]
+            )
+            variables = {"prompt": prompt}
+
+        chain = template | self._llm | JsonOutputParser()
+        return await self._invoke_with_retry(chain, variables)
+
     async def summarize(self, text: str) -> str:
         """텍스트 요약."""
         template = ChatPromptTemplate.from_messages(

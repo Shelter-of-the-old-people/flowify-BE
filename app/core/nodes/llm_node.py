@@ -27,6 +27,11 @@ class LLMNodeStrategy(NodeStrategy):
 
         text = self._extract_text_from_canonical(input_data)
 
+        if output_data_type == "SPREADSHEET_DATA":
+            prompt = runtime_config.get("prompt") or self.config.get("prompt", "")
+            result = await self._llm_service.process_json(prompt, context=text)
+            return self._to_spreadsheet_payload(result)
+
         if action == "summarize":
             result = await self._llm_service.summarize(text)
         elif action == "classify":
@@ -133,3 +138,21 @@ class LLMNodeStrategy(NodeStrategy):
             if value not in (None, ""):
                 payload[key] = value
         return payload
+
+    @staticmethod
+    def _to_spreadsheet_payload(result: dict[str, Any]) -> dict[str, Any]:
+        headers = result.get("headers", [])
+        rows = result.get("rows", [])
+
+        normalized_headers = [str(header) for header in headers] if isinstance(headers, list) else []
+        normalized_rows: list[list[str]] = []
+        if isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, list):
+                    normalized_rows.append([str(cell) for cell in row])
+
+        return {
+            "type": "SPREADSHEET_DATA",
+            "headers": normalized_headers,
+            "rows": normalized_rows,
+        }
