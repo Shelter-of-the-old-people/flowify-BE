@@ -141,16 +141,18 @@ class OutputNodeStrategy(NodeStrategy):
     async def _send_notion(self, token: str, config: dict, input_data: dict) -> dict:
         target_id = config["target_id"]
         data_type = input_data.get("type", "TEXT")
-        title = self._render_notion_title(config, input_data)
 
         svc = NotionService()
         if data_type == "TEXT":
             content = input_data.get("content", "")
+            title = self._resolve_notion_title(config, input_data, "Flowify Output")
             return await svc.create_page(token, target_id, title, content)
         if data_type == "SPREADSHEET_DATA":
             rows = input_data.get("rows", [])
             content = "\n".join(", ".join(str(c) for c in row) for row in rows)
+            title = self._resolve_notion_title(config, input_data, "Flowify Data")
             return await svc.create_page(token, target_id, title, content)
+        title = self._resolve_notion_title(config, input_data, "Flowify Output")
         return await svc.create_page(token, target_id, title, str(input_data))
 
     async def _send_google_drive(
@@ -357,19 +359,30 @@ class OutputNodeStrategy(NodeStrategy):
         return buffer.getvalue()
 
     @staticmethod
-    def _render_notion_title(config: dict[str, Any], input_data: dict[str, Any]) -> str:
-        template = config.get("title_template") or "Flowify Output"
-        values = {
+    def _resolve_notion_title(
+        config: dict[str, Any],
+        input_data: dict[str, Any],
+        default_title: str,
+    ) -> str:
+        template = str(config.get("title_template") or "").strip()
+        if not template:
+            return default_title
+
+        replacements = {
             "date": datetime.now(UTC).date().isoformat(),
-            "filename": input_data.get("filename", ""),
-            "subject": input_data.get("subject", ""),
+            "filename": str(input_data.get("filename", "")),
+            "subject": str(input_data.get("subject", "")),
+            "mime_type": str(input_data.get("mime_type", "")),
+            "sheet_name": str(input_data.get("sheet_name", "")),
+            "source_url": str(input_data.get("url", "")),
         }
 
         title = template
-        for key, value in values.items():
-            title = title.replace(f"{{{{{key}}}}}", str(value))
+        for key, value in replacements.items():
+            title = title.replace(f"{{{{{key}}}}}", value)
 
-        return title
+        resolved = title.strip()
+        return resolved or default_title
 
     @staticmethod
     def _metadata_filename(filename: str) -> str:
