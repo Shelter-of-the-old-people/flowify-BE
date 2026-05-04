@@ -139,7 +139,6 @@ class OutputNodeStrategy(NodeStrategy):
         return await svc.create_draft(token, to, subject, body)
 
     async def _send_notion(self, token: str, config: dict, input_data: dict) -> dict:
-        target_type = config["target_type"]
         target_id = config["target_id"]
         data_type = input_data.get("type", "TEXT")
 
@@ -147,8 +146,6 @@ class OutputNodeStrategy(NodeStrategy):
         if data_type == "TEXT":
             content = input_data.get("content", "")
             title = self._resolve_notion_title(config, input_data, "Flowify Output")
-            if target_type == "page":
-                return await svc.create_page(token, target_id, title, content)
             return await svc.create_page(token, target_id, title, content)
         if data_type == "SPREADSHEET_DATA":
             rows = input_data.get("rows", [])
@@ -374,6 +371,7 @@ class OutputNodeStrategy(NodeStrategy):
         replacements = {
             "date": datetime.now(UTC).date().isoformat(),
             "filename": str(input_data.get("filename", "")),
+            "subject": str(input_data.get("subject", "")),
             "mime_type": str(input_data.get("mime_type", "")),
             "sheet_name": str(input_data.get("sheet_name", "")),
             "source_url": str(input_data.get("url", "")),

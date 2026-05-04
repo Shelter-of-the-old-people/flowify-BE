@@ -241,6 +241,24 @@ async def test_gmail_label_emails(service_tokens: dict) -> None:
     )
 
 
+async def test_gmail_label_emails_uses_configured_max_results(service_tokens: dict) -> None:
+    """Gmail label_emails uses node.config.maxResults when it is configured."""
+    strategy = InputNodeStrategy({})
+    node = _source_node("gmail", "label_emails", "IMPORTANT")
+    node["config"] = {"maxResults": 100}
+
+    with patch("app.core.nodes.input_node.GmailService") as mock_gmail_class:
+        mock_gmail = mock_gmail_class.return_value
+        mock_gmail.list_messages = AsyncMock(return_value=[])
+
+        result = await strategy.execute(node, None, service_tokens)
+
+    assert result == {"type": "EMAIL_LIST", "items": []}
+    mock_gmail.list_messages.assert_awaited_once_with(
+        service_tokens["gmail"], query="label:IMPORTANT", max_results=100
+    )
+
+
 # ── Slack ────────────────────────────────────────────────────────
 
 

@@ -59,6 +59,7 @@ class InputNodeStrategy(NodeStrategy):
         mode = runtime_source["mode"]
         target = runtime_source.get("target", "")
         canonical_type = runtime_source.get("canonical_input_type", "TEXT")
+        config = node.get("config") or {}
 
         token = service_tokens.get(service, "")
         if not token and service not in ("web_crawl",):
@@ -70,7 +71,13 @@ class InputNodeStrategy(NodeStrategy):
         if service == "google_drive":
             return await self._fetch_google_drive(token, mode, target, canonical_type)
         if service == "gmail":
-            return await self._fetch_gmail(token, mode, target, canonical_type)
+            return await self._fetch_gmail(
+                token,
+                mode,
+                target,
+                canonical_type,
+                self._resolve_max_results(config),
+            )
         if service == "google_sheets":
             return await self._fetch_google_sheets(token, mode, target, canonical_type)
         if service == "slack":
@@ -171,7 +178,12 @@ class InputNodeStrategy(NodeStrategy):
     # Gmail
 
     async def _fetch_gmail(
-        self, token: str, mode: str, target: str, canonical_type: str
+        self,
+        token: str,
+        mode: str,
+        target: str,
+        canonical_type: str,
+        max_results: int,
     ) -> dict[str, Any]:
         svc = GmailService()
 
@@ -219,7 +231,11 @@ class InputNodeStrategy(NodeStrategy):
             return self._to_single_email(msgs[0])
 
         if mode == "label_emails":
-            msgs = await svc.list_messages(token, query=f"label:{target}", max_results=20)
+            msgs = await svc.list_messages(
+                token,
+                query=f"label:{target}",
+                max_results=max_results,
+            )
             return {
                 "type": "EMAIL_LIST",
                 "items": [
@@ -247,6 +263,20 @@ class InputNodeStrategy(NodeStrategy):
             ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
             detail=f"service=gmail, mode={mode} is not supported",
         )
+
+    @staticmethod
+    def _resolve_max_results(config: dict[str, Any]) -> int:
+        raw_value = config.get("maxResults")
+        if raw_value in (None, ""):
+            return 20
+
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            logger.warning("Invalid maxResults value for Gmail source: %s", raw_value)
+            return 20
+
+        return max(1, value)
 
     @staticmethod
     def _to_single_email(msg: dict) -> dict[str, Any]:

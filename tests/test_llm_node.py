@@ -365,3 +365,38 @@ def test_validate_unknown_action():
             )
             is False
         )
+
+
+async def test_extract_text_from_email_list_includes_mail_metadata():
+    with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
+        mock_instance = mock_svc_cls.return_value
+        mock_instance.process = AsyncMock(return_value="정리 결과")
+
+        from app.core.nodes.llm_node import LLMNodeStrategy
+
+        node = LLMNodeStrategy(config={"action": "process", "prompt": "정리해줘"})
+        node._llm_service = mock_instance
+
+        await node.execute(
+            node=_node(runtime_config={"action": "process", "prompt": "정리해줘"}),
+            input_data={
+                "type": "EMAIL_LIST",
+                "items": [
+                    {
+                        "from": "sender@example.com",
+                        "date": "2026-05-04",
+                        "subject": "메일 제목",
+                        "body": "메일 본문",
+                    }
+                ],
+            },
+            service_tokens={},
+        )
+
+    call_args = mock_instance.process.await_args.kwargs["context"]
+    assert "[Email 1]" in call_args
+    assert "From: sender@example.com" in call_args
+    assert "Date: 2026-05-04" in call_args
+    assert "Subject: 메일 제목" in call_args
+    assert "Body:" in call_args
+    assert "메일 본문" in call_args
