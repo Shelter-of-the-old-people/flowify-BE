@@ -2,6 +2,7 @@
 
 import base64
 import csv
+from datetime import UTC, datetime
 import io
 import json
 import logging
@@ -138,21 +139,19 @@ class OutputNodeStrategy(NodeStrategy):
         return await svc.create_draft(token, to, subject, body)
 
     async def _send_notion(self, token: str, config: dict, input_data: dict) -> dict:
-        target_type = config["target_type"]
         target_id = config["target_id"]
         data_type = input_data.get("type", "TEXT")
+        title = self._render_notion_title(config, input_data)
 
         svc = NotionService()
         if data_type == "TEXT":
             content = input_data.get("content", "")
-            if target_type == "page":
-                return await svc.create_page(token, target_id, "Flowify Output", content)
-            return await svc.create_page(token, target_id, "Flowify Output", content)
+            return await svc.create_page(token, target_id, title, content)
         if data_type == "SPREADSHEET_DATA":
             rows = input_data.get("rows", [])
             content = "\n".join(", ".join(str(c) for c in row) for row in rows)
-            return await svc.create_page(token, target_id, "Flowify Data", content)
-        return await svc.create_page(token, target_id, "Flowify Output", str(input_data))
+            return await svc.create_page(token, target_id, title, content)
+        return await svc.create_page(token, target_id, title, str(input_data))
 
     async def _send_google_drive(
         self,
@@ -356,6 +355,21 @@ class OutputNodeStrategy(NodeStrategy):
             writer.writerow(headers)
         writer.writerows(input_data.get("rows", []))
         return buffer.getvalue()
+
+    @staticmethod
+    def _render_notion_title(config: dict[str, Any], input_data: dict[str, Any]) -> str:
+        template = config.get("title_template") or "Flowify Output"
+        values = {
+            "date": datetime.now(UTC).date().isoformat(),
+            "filename": input_data.get("filename", ""),
+            "subject": input_data.get("subject", ""),
+        }
+
+        title = template
+        for key, value in values.items():
+            title = title.replace(f"{{{{{key}}}}}", str(value))
+
+        return title
 
     @staticmethod
     def _metadata_filename(filename: str) -> str:

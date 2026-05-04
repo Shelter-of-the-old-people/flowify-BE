@@ -78,9 +78,21 @@ class LLMNodeStrategy(NodeStrategy):
             return "\n".join(f"- {i.get('filename', '')}" for i in items)
         if data_type == "EMAIL_LIST":
             items = input_data.get("items", [])
-            return "\n---\n".join(
-                f"Subject: {i.get('subject', '')}\n{i.get('body', '')}" for i in items
-            )
+            formatted_items = []
+            for index, item in enumerate(items, start=1):
+                formatted_items.append(
+                    "\n".join(
+                        [
+                            f"[Email {index}]",
+                            f"From: {item.get('from', '')}",
+                            f"Date: {item.get('date', '')}",
+                            f"Subject: {item.get('subject', '')}",
+                            "Body:",
+                            item.get("body", ""),
+                        ]
+                    )
+                )
+            return "\n\n---\n\n".join(formatted_items)
         if data_type == "SCHEDULE_DATA":
             items = input_data.get("items", [])
             return "\n".join(
