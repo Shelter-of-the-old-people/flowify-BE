@@ -49,6 +49,7 @@ async def test_google_drive_single_file(service_tokens: dict) -> None:
 
     assert result == {
         "type": "SINGLE_FILE",
+        "file_id": "file_123",
         "filename": "report.txt",
         "content": "hello",
         "mime_type": "text/plain",
@@ -86,20 +87,75 @@ async def test_google_drive_folder_all_files(service_tokens: dict) -> None:
     assert result["type"] == "FILE_LIST"
     assert result["items"] == [
         {
+            "file_id": "file_1",
             "filename": "a.txt",
             "mime_type": "text/plain",
             "size": 12,
+            "created_time": "",
+            "modified_time": "",
             "url": "https://drive.google.com/file/d/file_1",
         },
         {
+            "file_id": "file_2",
             "filename": "b.pdf",
             "mime_type": "application/pdf",
             "size": 34,
+            "created_time": "",
+            "modified_time": "",
             "url": "https://drive.google.com/file/d/file_2",
         },
     ]
     mock_drive.list_files.assert_awaited_once_with(
         service_tokens["google_drive"], folder_id="folder_123"
+    )
+
+
+async def test_google_drive_folder_new_file_reads_latest_created_file(service_tokens: dict) -> None:
+    """folder_new_file uses latest-created file metadata and downloads that file."""
+    strategy = InputNodeStrategy({})
+    node = _source_node("google_drive", "folder_new_file", "folder_123")
+
+    with patch("app.core.nodes.input_node.GoogleDriveService") as mock_drive_class:
+        mock_drive = mock_drive_class.return_value
+        mock_drive.list_files = AsyncMock(
+            return_value=[
+                {
+                    "id": "file_latest",
+                    "name": "latest.pdf",
+                    "mimeType": "application/pdf",
+                    "createdTime": "2026-05-04T12:00:00Z",
+                    "modifiedTime": "2026-05-04T12:10:00Z",
+                }
+            ]
+        )
+        mock_drive.download_file = AsyncMock(
+            return_value={
+                "name": "latest.pdf",
+                "content": "summary source",
+                "mimeType": "application/pdf",
+            }
+        )
+
+        result = await strategy.execute(node, None, service_tokens)
+
+    assert result == {
+        "type": "SINGLE_FILE",
+        "file_id": "file_latest",
+        "filename": "latest.pdf",
+        "content": "summary source",
+        "mime_type": "application/pdf",
+        "created_time": "2026-05-04T12:00:00Z",
+        "modified_time": "2026-05-04T12:10:00Z",
+        "url": "https://drive.google.com/file/d/file_latest",
+    }
+    mock_drive.list_files.assert_awaited_once_with(
+        service_tokens["google_drive"],
+        folder_id="folder_123",
+        max_results=1,
+        order_by="createdTime desc",
+    )
+    mock_drive.download_file.assert_awaited_once_with(
+        service_tokens["google_drive"], "file_latest"
     )
 
 
