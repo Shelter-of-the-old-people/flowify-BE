@@ -12,19 +12,27 @@ class GoogleDriveService(BaseIntegrationService):
     """Google Drive API integration service."""
 
     async def list_files(
-        self, token: str, folder_id: str | None = None, max_results: int = 50
+        self,
+        token: str,
+        folder_id: str | None = None,
+        max_results: int = 50,
+        order_by: str | None = None,
     ) -> list[dict]:
         """List files in a Drive folder."""
         query = f"'{folder_id}' in parents and trashed=false" if folder_id else "trashed=false"
+        params = {
+            "q": query,
+            "pageSize": max_results,
+            "fields": "files(id,name,mimeType,size,createdTime,modifiedTime)",
+        }
+        if order_by:
+            params["orderBy"] = order_by
+
         data = await self._request(
             "GET",
             f"{DRIVE_API}/files",
             token,
-            params={
-                "q": query,
-                "pageSize": max_results,
-                "fields": "files(id,name,mimeType,size,modifiedTime)",
-            },
+            params=params,
         )
         return data.get("files", [])
 
@@ -59,11 +67,18 @@ class GoogleDriveService(BaseIntegrationService):
                 params={"alt": "media"},
             )
 
+        if isinstance(content, dict) and isinstance(content.get("text"), str):
+            normalized_content = content["text"]
+        elif isinstance(content, str):
+            normalized_content = content
+        else:
+            normalized_content = str(content)
+
         return {
             "id": meta.get("id"),
             "name": meta.get("name"),
             "mimeType": mime,
-            "content": content if isinstance(content, str) else str(content),
+            "content": normalized_content,
         }
 
     async def upload_file(
