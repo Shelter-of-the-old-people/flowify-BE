@@ -195,7 +195,9 @@ class LLMNodeStrategy(NodeStrategy):
         headers = result.get("headers", [])
         rows = result.get("rows", [])
 
-        normalized_headers = [str(header) for header in headers] if isinstance(headers, list) else []
+        normalized_headers = (
+            [str(header) for header in headers] if isinstance(headers, list) else []
+        )
         normalized_rows: list[list[str]] = []
         if isinstance(rows, list):
             for row in rows:

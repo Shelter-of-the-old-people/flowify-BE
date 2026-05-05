@@ -6,9 +6,7 @@ from app.common.errors import ErrorCode, FlowifyException
 from app.core.nodes.base import NodeStrategy
 
 SUPPORTED_FILTER_ACTIONS = frozenset({"filter_fields", "filter_metadata"})
-UNSUPPORTED_FILTER_ACTIONS = frozenset(
-    {"filter_condition", "filter_type", "filter_content"}
-)
+UNSUPPORTED_FILTER_ACTIONS = frozenset({"filter_condition", "filter_type", "filter_content"})
 LIST_PAYLOAD_TYPES = frozenset({"FILE_LIST", "EMAIL_LIST", "SCHEDULE_DATA"})
 
 FIELD_ALIASES = {
@@ -194,9 +192,7 @@ class DataFilterNodeStrategy(NodeStrategy):
                 "kind": "items",
                 "fields": fields,
                 "items": [
-                    self._project_mapping(item, fields)
-                    for item in data
-                    if isinstance(item, dict)
+                    self._project_mapping(item, fields) for item in data if isinstance(item, dict)
                 ],
             }
         if isinstance(data, dict):
