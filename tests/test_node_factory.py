@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from app.core.nodes.data_filter_node import DataFilterNodeStrategy
 from app.core.nodes.factory import NodeFactory, resolve_strategy_key
 from app.core.nodes.input_node import InputNodeStrategy
 from app.core.nodes.llm_node import LLMNodeStrategy
@@ -45,6 +46,21 @@ def test_factory_keeps_ai_subtype_on_llm_strategy():
 
     assert isinstance(strategy, LLMNodeStrategy)
     assert resolve_strategy_key(node_def) == "llm"
+
+
+def test_factory_routes_data_filter_subtype_to_data_filter_strategy():
+    node_def = NodeDefinition(
+        id="node_filter",
+        type="DATA_FILTER",
+        config={},
+        runtime_type="llm",
+        runtime_config={"node_type": "DATA_FILTER"},
+    )
+
+    strategy = NodeFactory.create_from_node_def(node_def)
+
+    assert isinstance(strategy, DataFilterNodeStrategy)
+    assert resolve_strategy_key(node_def) == "data_filter"
 
 
 def test_factory_keeps_runtime_type_primary_for_non_llm_nodes():

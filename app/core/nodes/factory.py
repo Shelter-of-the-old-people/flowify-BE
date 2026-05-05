@@ -1,5 +1,6 @@
 from app.common.errors import ErrorCode, FlowifyException
 from app.core.nodes.base import NodeStrategy
+from app.core.nodes.data_filter_node import DataFilterNodeStrategy
 from app.core.nodes.input_node import InputNodeStrategy
 from app.core.nodes.llm_node import LLMNodeStrategy
 from app.core.nodes.logic_node import IfElseNodeStrategy, LoopNodeStrategy
@@ -13,10 +14,12 @@ _NODE_REGISTRY: dict[str, type[NodeStrategy]] = {
     "loop": LoopNodeStrategy,
     "output": OutputNodeStrategy,
     "passthrough": PassthroughNodeStrategy,
+    "data_filter": DataFilterNodeStrategy,
 }
 
 _LLM_SUBTYPE_STRATEGY_KEYS: dict[str, str] = {
     "PASSTHROUGH": "passthrough",
+    "DATA_FILTER": "data_filter",
 }
 
 
