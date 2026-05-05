@@ -332,6 +332,153 @@ class TestLoopExecution:
         assert body_log.outputData["iterations"] == 2
 
     @pytest.mark.asyncio
+    async def test_file_list_loop_preserves_text_results_for_drive_sink(self, mock_db):
+        """FILE_LIST → loop → llm → Google Drive: TEXT 결과를 FILE_LIST로 보존합니다."""
+        executor = WorkflowExecutor(mock_db)
+        output_input: dict = {}
+
+        async def side_effect(node, input_data, service_tokens):
+            node_type = node.get("type", "")
+            if node_type == "input":
+                return {
+                    "type": "FILE_LIST",
+                    "items": [
+                        {
+                            "file_id": "f1",
+                            "filename": "a.pdf",
+                            "content": "aaa",
+                            "mime_type": "application/pdf",
+                        },
+                        {
+                            "file_id": "f2",
+                            "filename": "b.docx",
+                            "content": "bbb",
+                            "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        },
+                    ],
+                }
+            if node_type == "loop":
+                return input_data
+            if node_type == "llm":
+                return {
+                    "type": "TEXT",
+                    "content": f"processed:{input_data.get('content', '')}",
+                    "file_id": input_data.get("file_id"),
+                    "filename": input_data.get("filename"),
+                    "mime_type": input_data.get("mime_type"),
+                }
+            if node.get("runtime_type") == "output":
+                output_input.update(input_data)
+                return {"type": "TEXT", "content": "sent"}
+            return {"type": "TEXT", "content": "ok"}
+
+        executor._factory = _mock_factory(side_effect=side_effect)
+
+        nodes = [
+            NodeDefinition(id="node_1", type="input", config={}),
+            self._make_loop_node("node_2"),
+            NodeDefinition(id="node_3", type="llm", config={}),
+            NodeDefinition(
+                id="node_4",
+                type="google_drive",
+                config={},
+                runtime_type="output",
+                runtime_sink={
+                    "service": "google_drive",
+                    "config": {"folder_id": "folder_123"},
+                },
+            ),
+        ]
+        edges = _make_edges(("node_1", "node_2"), ("node_2", "node_3"), ("node_3", "node_4"))
+
+        result = await executor.execute(
+            execution_id="exec_loop_drive",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=nodes,
+            edges=edges,
+            service_tokens={},
+        )
+
+        assert result.state == WorkflowState.SUCCESS
+        body_log = result.nodeLogs[2]
+        assert body_log.outputData["type"] == "FILE_LIST"
+        assert body_log.outputData["iterations"] == 2
+        assert body_log.outputData["items"] == [
+            {
+                "filename": "001-a.txt",
+                "mime_type": "text/plain",
+                "content": "processed:aaa",
+                "source_file_id": "f1",
+                "source_filename": "a.pdf",
+                "source_mime_type": "application/pdf",
+            },
+            {
+                "filename": "002-b.txt",
+                "mime_type": "text/plain",
+                "content": "processed:bbb",
+                "source_file_id": "f2",
+                "source_filename": "b.docx",
+                "source_mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            },
+        ]
+        assert output_input["type"] == "FILE_LIST"
+        assert len(output_input["items"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_file_list_loop_keeps_text_aggregate_for_slack_sink(self, mock_db):
+        """FILE_LIST → loop → llm → Slack: FILE_LIST 미지원 sink는 TEXT 집계를 유지합니다."""
+        executor = WorkflowExecutor(mock_db)
+
+        async def side_effect(node, input_data, service_tokens):
+            node_type = node.get("type", "")
+            if node_type == "input":
+                return {
+                    "type": "FILE_LIST",
+                    "items": [
+                        {"file_id": "f1", "filename": "a.txt", "content": "aaa"},
+                        {"file_id": "f2", "filename": "b.txt", "content": "bbb"},
+                    ],
+                }
+            if node_type == "loop":
+                return input_data
+            if node_type == "llm":
+                return {"type": "TEXT", "content": f"processed:{input_data.get('content', '')}"}
+            return {"type": "TEXT", "content": "sent"}
+
+        executor._factory = _mock_factory(side_effect=side_effect)
+
+        nodes = [
+            NodeDefinition(id="node_1", type="input", config={}),
+            self._make_loop_node("node_2"),
+            NodeDefinition(id="node_3", type="llm", config={}),
+            NodeDefinition(
+                id="node_4",
+                type="slack",
+                config={},
+                runtime_type="output",
+                runtime_sink={"service": "slack", "config": {"channel": "C123"}},
+            ),
+        ]
+        edges = _make_edges(("node_1", "node_2"), ("node_2", "node_3"), ("node_3", "node_4"))
+
+        result = await executor.execute(
+            execution_id="exec_loop_slack",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=nodes,
+            edges=edges,
+            service_tokens={},
+        )
+
+        assert result.state == WorkflowState.SUCCESS
+        body_log = result.nodeLogs[2]
+        assert body_log.outputData["type"] == "TEXT"
+        assert body_log.outputData["iterations"] == 2
+        assert "1. processed:aaa" in body_log.outputData["content"]
+        assert "2. processed:bbb" in body_log.outputData["content"]
+
+    @pytest.mark.asyncio
     async def test_email_list_loop_executes_body_per_item(self, mock_db):
         """EMAIL_LIST → loop → llm: SINGLE_EMAIL input per iteration."""
         executor = WorkflowExecutor(mock_db)
@@ -513,9 +660,6 @@ class TestLoopExecution:
         )
 
         assert result.state == WorkflowState.SUCCESS
-        # node_3 should NOT appear in the main loop execution_calls
-        # (it's executed via _execute_loop_body, not _execute_node in main loop)
-        main_loop_calls = [c for c in execution_calls if c == "node_3"]
         # The mock is shared, so node_3 appears from loop body execution
         # But the key check: nodeLogs should have exactly 3 entries (no duplicate for node_3)
         assert len(result.nodeLogs) == 3
@@ -544,17 +688,13 @@ class TestToLoopItemPayload:
 
     def test_file_list_to_single_file(self):
         item = {"file_id": "f1", "filename": "a.txt", "content": "hello"}
-        result = WorkflowExecutor._to_loop_item_payload(
-            "FILE_LIST", "SINGLE_FILE", item, {}
-        )
+        result = WorkflowExecutor._to_loop_item_payload("FILE_LIST", "SINGLE_FILE", item, {})
         assert result["type"] == "SINGLE_FILE"
         assert result["file_id"] == "f1"
 
     def test_email_list_to_single_email(self):
         item = {"subject": "Hi", "from": "a@b.com", "body": "test"}
-        result = WorkflowExecutor._to_loop_item_payload(
-            "EMAIL_LIST", "SINGLE_EMAIL", item, {}
-        )
+        result = WorkflowExecutor._to_loop_item_payload("EMAIL_LIST", "SINGLE_EMAIL", item, {})
         assert result["type"] == "SINGLE_EMAIL"
         assert result["subject"] == "Hi"
 
