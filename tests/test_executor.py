@@ -254,6 +254,363 @@ class TestExecuteWorkflow:
         )
 
 
+class TestLoopExecution:
+    """Loop one-by-one executor-level 반복 실행 테스트."""
+
+    def _make_loop_node(self, node_id: str = "node_2") -> NodeDefinition:
+        """runtime_type='loop'인 노드를 생성합니다."""
+        return NodeDefinition(
+            id=node_id,
+            type="loop",
+            config={},
+            runtime_type="loop",
+            runtime_config={"node_type": "loop", "output_data_type": "SINGLE_FILE"},
+        )
+
+    def _make_loop_node_email(self, node_id: str = "node_2") -> NodeDefinition:
+        return NodeDefinition(
+            id=node_id,
+            type="loop",
+            config={},
+            runtime_type="loop",
+            runtime_config={"node_type": "loop", "output_data_type": "SINGLE_EMAIL"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_file_list_loop_executes_body_per_item(self, mock_db):
+        """FILE_LIST → loop → llm: body 2회 실행, TEXT aggregate."""
+        executor = WorkflowExecutor(mock_db)
+
+        call_count = 0
+
+        async def side_effect(node, input_data, service_tokens):
+            nonlocal call_count
+            call_count += 1
+            node_type = node.get("type", "")
+            if node_type == "input":
+                return {
+                    "type": "FILE_LIST",
+                    "items": [
+                        {"file_id": "f1", "filename": "a.txt", "content": "aaa"},
+                        {"file_id": "f2", "filename": "b.txt", "content": "bbb"},
+                    ],
+                }
+            if node_type == "loop":
+                # LoopNodeStrategy just passes through
+                return input_data
+            if node_type == "llm":
+                content = input_data.get("content", "")
+                return {"type": "TEXT", "content": f"processed:{content}"}
+            return {"type": "TEXT", "content": "ok"}
+
+        executor._factory = _mock_factory(side_effect=side_effect)
+
+        nodes = [
+            NodeDefinition(id="node_1", type="input", config={}),
+            self._make_loop_node("node_2"),
+            NodeDefinition(id="node_3", type="llm", config={}),
+            NodeDefinition(id="node_4", type="output", config={}),
+        ]
+        edges = _make_edges(("node_1", "node_2"), ("node_2", "node_3"), ("node_3", "node_4"))
+
+        result = await executor.execute(
+            execution_id="exec_loop_1",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=nodes,
+            edges=edges,
+            service_tokens={},
+        )
+
+        assert result.state == WorkflowState.SUCCESS
+        # nodeLogs: input, loop, body(node_3 aggregate), output
+        assert len(result.nodeLogs) == 4
+        body_log = result.nodeLogs[2]
+        assert body_log.nodeId == "node_3"
+        assert body_log.status == "success"
+        assert body_log.outputData["type"] == "TEXT"
+        assert body_log.outputData["iterations"] == 2
+
+    @pytest.mark.asyncio
+    async def test_email_list_loop_executes_body_per_item(self, mock_db):
+        """EMAIL_LIST → loop → llm: SINGLE_EMAIL input per iteration."""
+        executor = WorkflowExecutor(mock_db)
+
+        async def side_effect(node, input_data, service_tokens):
+            node_type = node.get("type", "")
+            if node_type == "input":
+                return {
+                    "type": "EMAIL_LIST",
+                    "items": [
+                        {"subject": "Mail 1", "from": "a@x.com", "body": "hi"},
+                        {"subject": "Mail 2", "from": "b@x.com", "body": "bye"},
+                    ],
+                }
+            if node_type == "loop":
+                return input_data
+            if node_type == "llm":
+                return {"type": "TEXT", "content": f"reply to: {input_data.get('subject', '')}"}
+            return {"type": "TEXT", "content": "ok"}
+
+        executor._factory = _mock_factory(side_effect=side_effect)
+
+        nodes = [
+            NodeDefinition(id="node_1", type="input", config={}),
+            self._make_loop_node_email("node_2"),
+            NodeDefinition(id="node_3", type="llm", config={}),
+        ]
+        edges = _make_edges(("node_1", "node_2"), ("node_2", "node_3"))
+
+        result = await executor.execute(
+            execution_id="exec_loop_email",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=nodes,
+            edges=edges,
+            service_tokens={},
+        )
+
+        assert result.state == WorkflowState.SUCCESS
+        body_log = result.nodeLogs[2]
+        assert body_log.outputData["iterations"] == 2
+        assert "reply to: Mail 1" in body_log.outputData["content"]
+        assert "reply to: Mail 2" in body_log.outputData["content"]
+
+    @pytest.mark.asyncio
+    async def test_loop_no_outgoing_edge_raises(self, mock_db):
+        """Loop에 outgoing edge 없으면 INVALID_REQUEST."""
+        executor = WorkflowExecutor(mock_db)
+
+        async def side_effect(node, input_data, service_tokens):
+            if node.get("type") == "input":
+                return {"type": "FILE_LIST", "items": [{"file_id": "f1"}]}
+            return input_data
+
+        executor._factory = _mock_factory(side_effect=side_effect)
+
+        nodes = [
+            NodeDefinition(id="node_1", type="input", config={}),
+            self._make_loop_node("node_2"),
+        ]
+        edges = _make_edges(("node_1", "node_2"))
+
+        with pytest.raises(FlowifyException):
+            await executor.execute(
+                execution_id="exec_loop_no_edge",
+                workflow_id="wf_1",
+                user_id="usr_1",
+                nodes=nodes,
+                edges=edges,
+                service_tokens={},
+            )
+
+    @pytest.mark.asyncio
+    async def test_loop_multiple_outgoing_edges_raises(self, mock_db):
+        """Loop에 outgoing edge가 2개 이상이면 INVALID_REQUEST."""
+        executor = WorkflowExecutor(mock_db)
+
+        async def side_effect(node, input_data, service_tokens):
+            if node.get("type") == "input":
+                return {"type": "FILE_LIST", "items": [{"file_id": "f1"}]}
+            return input_data
+
+        executor._factory = _mock_factory(side_effect=side_effect)
+
+        nodes = [
+            NodeDefinition(id="node_1", type="input", config={}),
+            self._make_loop_node("node_2"),
+            NodeDefinition(id="node_3", type="llm", config={}),
+            NodeDefinition(id="node_4", type="llm", config={}),
+        ]
+        edges = _make_edges(("node_1", "node_2"), ("node_2", "node_3"), ("node_2", "node_4"))
+
+        with pytest.raises(FlowifyException):
+            await executor.execute(
+                execution_id="exec_loop_multi_edge",
+                workflow_id="wf_1",
+                user_id="usr_1",
+                nodes=nodes,
+                edges=edges,
+                service_tokens={},
+            )
+
+    @pytest.mark.asyncio
+    async def test_loop_body_failure_causes_workflow_failure(self, mock_db):
+        """Body node 실패 시 workflow failure."""
+        executor = WorkflowExecutor(mock_db)
+
+        async def side_effect(node, input_data, service_tokens):
+            node_type = node.get("type", "")
+            if node_type == "input":
+                return {
+                    "type": "FILE_LIST",
+                    "items": [{"file_id": "f1"}, {"file_id": "f2"}],
+                }
+            if node_type == "loop":
+                return input_data
+            if node_type == "llm":
+                raise RuntimeError("LLM API error")
+            return {"type": "TEXT", "content": "ok"}
+
+        executor._factory = _mock_factory(side_effect=side_effect)
+
+        nodes = [
+            NodeDefinition(id="node_1", type="input", config={}),
+            self._make_loop_node("node_2"),
+            NodeDefinition(id="node_3", type="llm", config={}),
+            NodeDefinition(id="node_4", type="output", config={}),
+        ]
+        edges = _make_edges(("node_1", "node_2"), ("node_2", "node_3"), ("node_3", "node_4"))
+
+        result = await executor.execute(
+            execution_id="exec_loop_fail",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=nodes,
+            edges=edges,
+            service_tokens={},
+        )
+
+        assert result.state == WorkflowState.ROLLBACK_AVAILABLE
+        body_log = next(log for log in result.nodeLogs if log.nodeId == "node_3")
+        assert body_log.status == "failed"
+        assert "iteration 0" in body_log.error.message
+
+    @pytest.mark.asyncio
+    async def test_body_node_not_re_executed_in_topological_order(self, mock_db):
+        """Body node는 handled_nodes에 의해 재실행되지 않는다."""
+        executor = WorkflowExecutor(mock_db)
+        execution_calls: list[str] = []
+
+        async def side_effect(node, input_data, service_tokens):
+            node_id = node.get("id", "")
+            node_type = node.get("type", "")
+            execution_calls.append(node_id)
+            if node_type == "input":
+                return {"type": "FILE_LIST", "items": [{"file_id": "f1"}]}
+            if node_type == "loop":
+                return input_data
+            if node_type == "llm":
+                return {"type": "TEXT", "content": "done"}
+            return {"type": "TEXT", "content": "ok"}
+
+        executor._factory = _mock_factory(side_effect=side_effect)
+
+        nodes = [
+            NodeDefinition(id="node_1", type="input", config={}),
+            self._make_loop_node("node_2"),
+            NodeDefinition(id="node_3", type="llm", config={}),
+        ]
+        edges = _make_edges(("node_1", "node_2"), ("node_2", "node_3"))
+
+        result = await executor.execute(
+            execution_id="exec_loop_no_reexec",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=nodes,
+            edges=edges,
+            service_tokens={},
+        )
+
+        assert result.state == WorkflowState.SUCCESS
+        # node_3 should NOT appear in the main loop execution_calls
+        # (it's executed via _execute_loop_body, not _execute_node in main loop)
+        main_loop_calls = [c for c in execution_calls if c == "node_3"]
+        # The mock is shared, so node_3 appears from loop body execution
+        # But the key check: nodeLogs should have exactly 3 entries (no duplicate for node_3)
+        assert len(result.nodeLogs) == 3
+
+
+class TestResolveLoopBodyNodeId:
+    """_resolve_loop_body_node_id 유닛 테스트."""
+
+    def test_single_outgoing_returns_target(self):
+        edges = _make_edges(("loop_1", "body_1"))
+        assert WorkflowExecutor._resolve_loop_body_node_id("loop_1", edges) == "body_1"
+
+    def test_no_outgoing_raises(self):
+        edges = _make_edges(("other", "body_1"))
+        with pytest.raises(FlowifyException):
+            WorkflowExecutor._resolve_loop_body_node_id("loop_1", edges)
+
+    def test_multiple_outgoing_raises(self):
+        edges = _make_edges(("loop_1", "body_1"), ("loop_1", "body_2"))
+        with pytest.raises(FlowifyException):
+            WorkflowExecutor._resolve_loop_body_node_id("loop_1", edges)
+
+
+class TestToLoopItemPayload:
+    """_to_loop_item_payload 유닛 테스트."""
+
+    def test_file_list_to_single_file(self):
+        item = {"file_id": "f1", "filename": "a.txt", "content": "hello"}
+        result = WorkflowExecutor._to_loop_item_payload(
+            "FILE_LIST", "SINGLE_FILE", item, {}
+        )
+        assert result["type"] == "SINGLE_FILE"
+        assert result["file_id"] == "f1"
+
+    def test_email_list_to_single_email(self):
+        item = {"subject": "Hi", "from": "a@b.com", "body": "test"}
+        result = WorkflowExecutor._to_loop_item_payload(
+            "EMAIL_LIST", "SINGLE_EMAIL", item, {}
+        )
+        assert result["type"] == "SINGLE_EMAIL"
+        assert result["subject"] == "Hi"
+
+    def test_spreadsheet_data_row(self):
+        loop_input = {"headers": ["name", "age"], "rows": [["Alice", 30]]}
+        result = WorkflowExecutor._to_loop_item_payload(
+            "SPREADSHEET_DATA", "SPREADSHEET_DATA", ["Alice", 30], loop_input
+        )
+        assert result == {
+            "type": "SPREADSHEET_DATA",
+            "headers": ["name", "age"],
+            "rows": [["Alice", 30]],
+        }
+
+    def test_unsupported_conversion_raises(self):
+        with pytest.raises(FlowifyException):
+            WorkflowExecutor._to_loop_item_payload("UNKNOWN", "UNKNOWN", {}, {})
+
+
+class TestAggregateLoopOutputs:
+    """_aggregate_loop_outputs 유닛 테스트."""
+
+    def test_text_aggregation(self):
+        results = [
+            {"type": "TEXT", "content": "first"},
+            {"type": "TEXT", "content": "second"},
+        ]
+        agg = WorkflowExecutor._aggregate_loop_outputs(results)
+        assert agg["type"] == "TEXT"
+        assert agg["iterations"] == 2
+        assert "1. first" in agg["content"]
+        assert "2. second" in agg["content"]
+
+    def test_single_file_to_file_list(self):
+        results = [
+            {"type": "SINGLE_FILE", "file_id": "f1"},
+            {"type": "SINGLE_FILE", "file_id": "f2"},
+        ]
+        agg = WorkflowExecutor._aggregate_loop_outputs(results)
+        assert agg["type"] == "FILE_LIST"
+        assert len(agg["items"]) == 2
+
+    def test_empty_results(self):
+        agg = WorkflowExecutor._aggregate_loop_outputs([])
+        assert agg["type"] == "TEXT"
+        assert agg["iterations"] == 0
+
+    def test_mixed_types_raises(self):
+        results = [
+            {"type": "TEXT", "content": "a"},
+            {"type": "SINGLE_FILE", "file_id": "f1"},
+        ]
+        with pytest.raises(FlowifyException):
+            WorkflowExecutor._aggregate_loop_outputs(results)
+
+
 class TestGenerateExecutionId:
     def test_format(self):
         eid = WorkflowExecutor.generate_execution_id()

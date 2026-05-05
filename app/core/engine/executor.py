@@ -99,6 +99,7 @@ class WorkflowExecutor:
         # v2: 노드별 출력을 canonical payload로 관리
         node_outputs: dict[str, dict[str, Any]] = {}
         skipped_nodes: set[str] = set()
+        handled_nodes: set[str] = set()
 
         try:
             for node_id in execution_order:
@@ -123,15 +124,16 @@ class WorkflowExecutor:
                     await self._finalize_execution(execution_id, execution)
                     return execution
 
-                if node_id in skipped_nodes:
-                    execution.nodeLogs.append(
-                        NodeExecutionLog(
-                            nodeId=node_id,
-                            status="skipped",
-                            startedAt=datetime.now(UTC),
-                            finishedAt=datetime.now(UTC),
+                if node_id in skipped_nodes or node_id in handled_nodes:
+                    if node_id in skipped_nodes:
+                        execution.nodeLogs.append(
+                            NodeExecutionLog(
+                                nodeId=node_id,
+                                status="skipped",
+                                startedAt=datetime.now(UTC),
+                                finishedAt=datetime.now(UTC),
+                            )
                         )
-                    )
                     continue
 
                 node_def = node_map[node_id]
@@ -174,8 +176,55 @@ class WorkflowExecutor:
                 # v2: 성공 시 canonical payload를 node_outputs에 저장
                 node_outputs[node_id] = node_log.outputData or {}
 
-                # IfElse 분기 처리: branch 값에 따라 반대쪽 서브트리 skip
+                # Loop 반복 실행 처리
                 runtime_type = getattr(node_def, "runtime_type", None) or node_def.type
+                if runtime_type == "loop":
+                    loop_output = node_outputs[node_id]
+                    body_node_id = self._resolve_loop_body_node_id(node_id, edges)
+
+                    if body_node_id not in node_map:
+                        raise FlowifyException(
+                            ErrorCode.INVALID_REQUEST,
+                            detail=f"Loop body node '{body_node_id}' not found in workflow.",
+                        )
+
+                    body_node_def = node_map[body_node_id]
+                    aggregate_log = await self._execute_loop_body(
+                        loop_node_def=node_def,
+                        body_node_def=body_node_def,
+                        loop_output=loop_output,
+                        service_tokens=service_tokens,
+                        snapshot_manager=snapshot_manager,
+                    )
+                    execution.nodeLogs.append(aggregate_log)
+
+                    if aggregate_log.status == "failed":
+                        logged_ids = {log.nodeId for log in execution.nodeLogs}
+                        for rem_id in execution_order:
+                            if rem_id not in logged_ids:
+                                execution.nodeLogs.append(
+                                    NodeExecutionLog(
+                                        nodeId=rem_id,
+                                        status="skipped",
+                                        startedAt=datetime.now(UTC),
+                                        finishedAt=datetime.now(UTC),
+                                    )
+                                )
+                        state_manager.transition(WorkflowState.FAILED)
+                        state_manager.transition(WorkflowState.ROLLBACK_AVAILABLE)
+                        execution.state = WorkflowState.ROLLBACK_AVAILABLE
+                        execution.errorMessage = (
+                            aggregate_log.error.message if aggregate_log.error else "Loop body execution failed"
+                        )
+                        execution.finishedAt = datetime.now(UTC)
+                        await self._finalize_execution(execution_id, execution)
+                        return execution
+
+                    node_outputs[body_node_id] = aggregate_log.outputData or {}
+                    handled_nodes.add(body_node_id)
+                    continue
+
+                # IfElse 분기 처리: branch 값에 따라 반대쪽 서브트리 skip
                 output_data = node_outputs[node_id]
                 if (
                     runtime_type == "if_else"
@@ -395,6 +444,248 @@ class WorkflowExecutor:
                     visited.add(child)
                     queue.append(child)
         return visited
+
+    # ── Loop helpers ──
+
+    @staticmethod
+    def _resolve_loop_body_node_id(
+        loop_node_id: str, edges: list[EdgeDefinition]
+    ) -> str:
+        """Loop 노드의 첫 번째 outgoing target을 body node로 반환한다.
+
+        v1 제약: outgoing edge가 정확히 1개여야 한다.
+        """
+        targets = [e.target for e in edges if e.source == loop_node_id]
+        if len(targets) == 0:
+            raise FlowifyException(
+                ErrorCode.INVALID_REQUEST,
+                detail=f"Loop node '{loop_node_id}' has no outgoing edge.",
+            )
+        if len(targets) > 1:
+            raise FlowifyException(
+                ErrorCode.INVALID_REQUEST,
+                detail=f"Loop node '{loop_node_id}' has multiple outgoing edges. v1 supports single body node only.",
+            )
+        return targets[0]
+
+    @staticmethod
+    def _to_loop_item_payload(
+        source_type: str,
+        item_type: str,
+        item: dict[str, Any] | list[Any],
+        loop_input: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Loop items의 개별 항목을 body node용 canonical payload로 변환."""
+        if source_type == "FILE_LIST" and item_type == "SINGLE_FILE":
+            payload = dict(item) if isinstance(item, dict) else {}
+            payload["type"] = "SINGLE_FILE"
+            return payload
+
+        if source_type == "EMAIL_LIST" and item_type == "SINGLE_EMAIL":
+            payload = dict(item) if isinstance(item, dict) else {}
+            payload["type"] = "SINGLE_EMAIL"
+            return payload
+
+        if source_type == "SPREADSHEET_DATA" and item_type == "SPREADSHEET_DATA":
+            row = item if isinstance(item, list) else []
+            return {
+                "type": "SPREADSHEET_DATA",
+                "headers": loop_input.get("headers", []),
+                "rows": [row],
+            }
+
+        if source_type == "SCHEDULE_DATA" and item_type == "SCHEDULE_DATA":
+            entry = item if isinstance(item, dict) else {}
+            return {
+                "type": "SCHEDULE_DATA",
+                "items": [entry],
+            }
+
+        raise FlowifyException(
+            ErrorCode.INVALID_REQUEST,
+            detail=f"Unsupported loop item conversion: {source_type} -> {item_type}",
+        )
+
+    @staticmethod
+    def _aggregate_loop_outputs(results: list[dict[str, Any]]) -> dict[str, Any]:
+        """Body node 반복 결과를 기존 canonical type으로 집계한다."""
+        if not results:
+            return {"type": "TEXT", "content": "", "loop_results": [], "iterations": 0}
+
+        output_type = results[0].get("type", "TEXT")
+
+        # 혼합 타입 검사
+        for r in results:
+            if r.get("type", "TEXT") != output_type:
+                raise FlowifyException(
+                    ErrorCode.INVALID_REQUEST,
+                    detail="Loop body produced mixed output types. v1 does not support this.",
+                )
+
+        iterations = len(results)
+
+        if output_type == "TEXT":
+            parts = []
+            for idx, r in enumerate(results, start=1):
+                parts.append(f"{idx}. {r.get('content', '')}")
+            return {
+                "type": "TEXT",
+                "content": "\n\n---\n\n".join(parts),
+                "loop_results": results,
+                "iterations": iterations,
+            }
+
+        if output_type == "SINGLE_FILE":
+            return {
+                "type": "FILE_LIST",
+                "items": results,
+                "loop_results": results,
+                "iterations": iterations,
+            }
+
+        if output_type == "SINGLE_EMAIL":
+            return {
+                "type": "EMAIL_LIST",
+                "items": results,
+                "loop_results": results,
+                "iterations": iterations,
+            }
+
+        if output_type == "SPREADSHEET_DATA":
+            headers = results[0].get("headers", [])
+            all_rows: list[list] = []
+            for r in results:
+                all_rows.extend(r.get("rows", []))
+            return {
+                "type": "SPREADSHEET_DATA",
+                "headers": headers,
+                "rows": all_rows,
+                "loop_results": results,
+                "iterations": iterations,
+            }
+
+        # Fallback for other types
+        return {
+            "type": output_type,
+            "loop_results": results,
+            "iterations": iterations,
+        }
+
+    async def _execute_loop_body(
+        self,
+        loop_node_def: NodeDefinition,
+        body_node_def: NodeDefinition,
+        loop_output: dict[str, Any],
+        service_tokens: dict[str, str],
+        snapshot_manager: "SnapshotManager",
+    ) -> NodeExecutionLog:
+        """Loop body node를 items 수만큼 반복 실행하고 aggregate log를 반환."""
+        started_at = datetime.now(UTC)
+
+        # Loop output에서 items 추출
+        items = loop_output.get("items", [])
+        source_type = loop_output.get("type", "")
+
+        # item type은 loop node의 runtime_config.output_data_type에서 결정
+        rc = loop_node_def.runtime_config
+        item_type = rc.output_data_type if rc else ""
+        if not item_type:
+            item_type = "SINGLE_FILE"  # fallback
+
+        # Body node strategy 생성
+        body_strategy = self._factory.create_from_node_def(body_node_def)
+        body_node_dict = body_node_def.model_dump(by_alias=False)
+
+        body_results: list[dict[str, Any]] = []
+
+        for idx, item in enumerate(items):
+            try:
+                item_payload = self._to_loop_item_payload(
+                    source_type, item_type, item, loop_output
+                )
+            except FlowifyException as e:
+                return NodeExecutionLog(
+                    nodeId=body_node_def.id,
+                    status="failed",
+                    inputData=self._sanitize_for_log(loop_output),
+                    error=ErrorDetail(
+                        code=e.error_code.name,
+                        message=e.detail,
+                        context={"iteration": idx},
+                    ),
+                    startedAt=started_at,
+                    finishedAt=datetime.now(UTC),
+                )
+
+            try:
+                result = await body_strategy.execute(
+                    node=body_node_dict,
+                    input_data=item_payload,
+                    service_tokens=service_tokens,
+                )
+                body_results.append(result)
+            except FlowifyException as e:
+                return NodeExecutionLog(
+                    nodeId=body_node_def.id,
+                    status="failed",
+                    inputData=self._sanitize_for_log(loop_output),
+                    error=ErrorDetail(
+                        code=e.error_code.name,
+                        message=f"Loop body failed at iteration {idx}: {e.detail}",
+                        context={"iteration": idx, "body_node_id": body_node_def.id},
+                    ),
+                    startedAt=started_at,
+                    finishedAt=datetime.now(UTC),
+                )
+            except Exception as e:
+                return NodeExecutionLog(
+                    nodeId=body_node_def.id,
+                    status="failed",
+                    inputData=self._sanitize_for_log(loop_output),
+                    error=ErrorDetail(
+                        code=ErrorCode.NODE_EXECUTION_FAILED.name,
+                        message=f"Loop body failed at iteration {idx}: {e!s}",
+                        context={"iteration": idx, "body_node_id": body_node_def.id},
+                    ),
+                    startedAt=started_at,
+                    finishedAt=datetime.now(UTC),
+                )
+
+        # 집계
+        try:
+            aggregate_output = self._aggregate_loop_outputs(body_results)
+        except FlowifyException as e:
+            return NodeExecutionLog(
+                nodeId=body_node_def.id,
+                status="failed",
+                inputData=self._sanitize_for_log(loop_output),
+                error=ErrorDetail(
+                    code=e.error_code.name,
+                    message=e.detail,
+                ),
+                startedAt=started_at,
+                finishedAt=datetime.now(UTC),
+            )
+
+        # 성공 aggregate log
+        input_summary = {
+            "type": source_type,
+            "items": items,
+            "iterations": len(items),
+        }
+
+        return NodeExecutionLog(
+            nodeId=body_node_def.id,
+            status="success",
+            inputData=self._sanitize_for_log(input_summary),
+            outputData=self._sanitize_for_log(aggregate_output),
+            snapshot=NodeSnapshot(
+                capturedAt=started_at,
+                stateData=self._sanitize_for_log(input_summary),
+            ),
+            startedAt=started_at,
+            finishedAt=datetime.now(UTC),
+        )
 
     @staticmethod
     def generate_execution_id() -> str:
