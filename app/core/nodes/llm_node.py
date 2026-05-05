@@ -1,16 +1,21 @@
-"""LLM node strategy for AI processing nodes."""
+"""AI 처리 노드의 LLM 실행 전략."""
 
 import json
 from typing import Any
 
+from app.common.errors import ErrorCode, FlowifyException
 from app.core.nodes.base import NodeStrategy
 from app.services.llm_service import LLMService
 
+PROMPT_REQUIRED_ACTIONS = frozenset({"process", "extract", "translate", "custom"})
+PROMPT_OPTIONAL_ACTIONS = frozenset({"summarize", "classify"})
+SUPPORTED_ACTIONS = PROMPT_REQUIRED_ACTIONS | PROMPT_OPTIONAL_ACTIONS
+
 
 class LLMNodeStrategy(NodeStrategy):
-    """Run the configured LLM action and return canonical output payloads."""
+    """설정된 LLM 작업을 실행하고 canonical payload를 반환합니다."""
 
-    def __init__(self, config: dict | None = None):
+    def __init__(self, config: dict | None = None) -> None:
         super().__init__(config)
         self._llm_service = LLMService()
 
@@ -20,15 +25,16 @@ class LLMNodeStrategy(NodeStrategy):
         input_data: dict[str, Any] | None,
         service_tokens: dict[str, str],
     ) -> dict[str, Any]:
-        # Prefer runtime_config values and fall back to static config.
         runtime_config = node.get("runtime_config") or {}
         action = runtime_config.get("action") or self.config.get("action", "process")
         output_data_type = runtime_config.get("output_data_type", "TEXT")
+        prompt = self._resolve_prompt(runtime_config)
+
+        self._ensure_executable_prompt(node, action, output_data_type, prompt)
 
         text = self._extract_text_from_canonical(input_data)
 
         if output_data_type == "SPREADSHEET_DATA":
-            prompt = runtime_config.get("prompt") or self.config.get("prompt", "")
             result = await self._llm_service.process_json(prompt, context=text)
             return self._to_spreadsheet_payload(result)
 
@@ -38,7 +44,6 @@ class LLMNodeStrategy(NodeStrategy):
             categories = runtime_config.get("categories") or self.config.get("categories")
             result = await self._llm_service.classify(text, categories)
         else:  # process, extract, translate, custom
-            prompt = runtime_config.get("prompt") or self.config.get("prompt", "")
             result = await self._llm_service.process(prompt, context=text)
 
         return self._build_output_payload(output_data_type, result, input_data)
@@ -46,13 +51,47 @@ class LLMNodeStrategy(NodeStrategy):
     def validate(self, node: dict[str, Any]) -> bool:
         runtime_config = node.get("runtime_config") or {}
         action = runtime_config.get("action") or self.config.get("action", "process")
-        if action == "process":
-            return bool(runtime_config.get("prompt") or self.config.get("prompt"))
-        return action in ("summarize", "classify", "extract", "translate", "custom")
+        output_data_type = runtime_config.get("output_data_type", "TEXT")
+        prompt = self._resolve_prompt(runtime_config)
+        if output_data_type == "SPREADSHEET_DATA":
+            return bool(prompt)
+        if action in PROMPT_REQUIRED_ACTIONS:
+            return bool(prompt)
+        return action in PROMPT_OPTIONAL_ACTIONS
+
+    def _resolve_prompt(self, runtime_config: dict[str, Any]) -> str:
+        """runtime_config와 fallback config에서 프롬프트를 조회합니다."""
+        prompt = runtime_config.get("prompt") or self.config.get("prompt", "")
+        return str(prompt).strip()
+
+    def _ensure_executable_prompt(
+        self,
+        node: dict[str, Any],
+        action: str,
+        output_data_type: str,
+        prompt: str,
+    ) -> None:
+        """LLM 호출 전 프롬프트 필수 조건을 검증합니다."""
+        if action not in SUPPORTED_ACTIONS:
+            raise FlowifyException(
+                ErrorCode.INVALID_REQUEST,
+                detail=f"지원하지 않는 AI 처리 방식입니다: {action}",
+                context={"node_id": node.get("id"), "action": action},
+            )
+
+        requires_prompt = (
+            output_data_type == "SPREADSHEET_DATA" or action in PROMPT_REQUIRED_ACTIONS
+        )
+        if requires_prompt and not prompt:
+            raise FlowifyException(
+                ErrorCode.INVALID_REQUEST,
+                detail="AI 처리 프롬프트가 없어 노드를 실행할 수 없습니다.",
+                context={"node_id": node.get("id"), "action": action},
+            )
 
     @staticmethod
     def _extract_text_from_canonical(input_data: dict | None) -> str:
-        """Extract plain text from a canonical payload."""
+        """canonical payload에서 LLM 입력용 텍스트를 추출합니다."""
         if not input_data:
             return ""
 

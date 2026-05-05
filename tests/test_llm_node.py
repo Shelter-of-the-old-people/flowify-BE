@@ -1,5 +1,9 @@
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
+from app.common.errors import ErrorCode, FlowifyException
+
 # v2 테스트 헬퍼: node dict와 canonical payload 사용
 _DEFAULT_NODE = {
     "id": "n1",
@@ -81,6 +85,28 @@ async def test_llm_node_process_default():
     mock_instance.process.assert_called_once()
 
 
+async def test_llm_node_process_without_prompt_raises_invalid_request():
+    with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
+        mock_instance = mock_svc_cls.return_value
+        mock_instance.process = AsyncMock(return_value="처리 결과")
+
+        from app.core.nodes.llm_node import LLMNodeStrategy
+
+        node = LLMNodeStrategy(config={"action": "process"})
+        node._llm_service = mock_instance
+
+        with pytest.raises(FlowifyException) as exc_info:
+            await node.execute(
+                node=_node(runtime_config={"action": "process"}),
+                input_data={"type": "TEXT", "content": "입력 데이터"},
+                service_tokens={},
+            )
+
+    assert exc_info.value.error_code == ErrorCode.INVALID_REQUEST
+    assert "프롬프트" in exc_info.value.detail
+    mock_instance.process.assert_not_called()
+
+
 async def test_llm_node_process_spreadsheet_data_output():
     with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
         mock_instance = mock_svc_cls.return_value
@@ -142,6 +168,53 @@ async def test_llm_node_process_spreadsheet_data_output():
             "문서 본문"
         ),
     )
+
+
+async def test_llm_node_spreadsheet_output_without_prompt_raises_invalid_request():
+    with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
+        mock_instance = mock_svc_cls.return_value
+        mock_instance.process_json = AsyncMock(return_value={"headers": [], "rows": []})
+
+        from app.core.nodes.llm_node import LLMNodeStrategy
+
+        node = LLMNodeStrategy(config={"action": "summarize"})
+        node._llm_service = mock_instance
+
+        with pytest.raises(FlowifyException) as exc_info:
+            await node.execute(
+                node=_node(
+                    runtime_config={
+                        "action": "summarize",
+                        "output_data_type": "SPREADSHEET_DATA",
+                    }
+                ),
+                input_data={"type": "TEXT", "content": "입력 데이터"},
+                service_tokens={},
+            )
+
+    assert exc_info.value.error_code == ErrorCode.INVALID_REQUEST
+    mock_instance.process_json.assert_not_called()
+
+
+async def test_llm_node_unknown_action_raises_invalid_request():
+    with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
+        mock_instance = mock_svc_cls.return_value
+        mock_instance.process = AsyncMock(return_value="처리 결과")
+
+        from app.core.nodes.llm_node import LLMNodeStrategy
+
+        node = LLMNodeStrategy(config={"action": "unknown", "prompt": "요청"})
+        node._llm_service = mock_instance
+
+        with pytest.raises(FlowifyException) as exc_info:
+            await node.execute(
+                node=_node(runtime_config={"action": "unknown", "prompt": "요청"}),
+                input_data={"type": "TEXT", "content": "입력 데이터"},
+                service_tokens={},
+            )
+
+    assert exc_info.value.error_code == ErrorCode.INVALID_REQUEST
+    mock_instance.process.assert_not_called()
 
 
 async def test_llm_node_text_output_preserves_file_metadata():
@@ -335,6 +408,18 @@ def test_validate_process_requires_prompt():
             is True
         )
         assert LLMNodeStrategy(config={}).validate(node_dict) is False
+        assert (
+            LLMNodeStrategy(config={"action": "summarize"}).validate(
+                {
+                    **node_dict,
+                    "runtime_config": {
+                        "action": "summarize",
+                        "output_data_type": "SPREADSHEET_DATA",
+                    },
+                }
+            )
+            is False
+        )
 
 
 def test_validate_summarize_classify_no_prompt_needed():
