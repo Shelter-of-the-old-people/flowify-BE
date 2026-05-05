@@ -42,6 +42,8 @@ async def test_google_drive_single_file(service_tokens: dict) -> None:
                 "name": "report.txt",
                 "content": "hello",
                 "mimeType": "text/plain",
+                "createdTime": "2026-05-04T12:00:00Z",
+                "modifiedTime": "2026-05-04T12:10:00Z",
             }
         )
 
@@ -53,6 +55,8 @@ async def test_google_drive_single_file(service_tokens: dict) -> None:
         "filename": "report.txt",
         "content": "hello",
         "mime_type": "text/plain",
+        "created_time": "2026-05-04T12:00:00Z",
+        "modified_time": "2026-05-04T12:10:00Z",
         "url": "https://drive.google.com/file/d/file_123",
     }
     mock_drive.download_file.assert_awaited_once_with(service_tokens["google_drive"], "file_123")

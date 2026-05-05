@@ -117,6 +117,8 @@ class InputNodeStrategy(NodeStrategy):
                 "filename": file_data.get("name", ""),
                 "content": file_data.get("content", ""),
                 "mime_type": file_data.get("mimeType", ""),
+                "created_time": file_data.get("createdTime", ""),
+                "modified_time": file_data.get("modifiedTime", ""),
                 "url": f"https://drive.google.com/file/d/{target}",
             }
 

@@ -19,6 +19,8 @@ async def test_download_file_unwraps_text_response() -> None:
                 "name": "doc.txt",
                 "mimeType": "text/plain",
                 "size": "10",
+                "createdTime": "2026-05-04T12:00:00Z",
+                "modifiedTime": "2026-05-04T12:10:00Z",
             },
             {"status_code": 200, "text": "hello world"},
         ],
@@ -29,5 +31,7 @@ async def test_download_file_unwraps_text_response() -> None:
         "id": "file_123",
         "name": "doc.txt",
         "mimeType": "text/plain",
+        "createdTime": "2026-05-04T12:00:00Z",
+        "modifiedTime": "2026-05-04T12:10:00Z",
         "content": "hello world",
     }

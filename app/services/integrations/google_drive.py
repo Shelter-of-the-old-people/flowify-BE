@@ -41,7 +41,7 @@ class GoogleDriveService(BaseIntegrationService):
             "GET",
             f"{DRIVE_API}/files/{file_id}",
             token,
-            params={"fields": "id,name,mimeType,size"},
+            params={"fields": "id,name,mimeType,size,createdTime,modifiedTime"},
         )
         mime = meta.get("mimeType", "")
 
@@ -77,6 +77,8 @@ class GoogleDriveService(BaseIntegrationService):
             "id": meta.get("id"),
             "name": meta.get("name"),
             "mimeType": mime,
+            "createdTime": meta.get("createdTime", ""),
+            "modifiedTime": meta.get("modifiedTime", ""),
             "content": normalized_content,
         }
 
