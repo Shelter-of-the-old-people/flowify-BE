@@ -3,6 +3,8 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.api.v1.deps import get_db, get_user_id
 from app.core.engine.executor import WorkflowExecutor, register_cancellation_event
+from app.core.engine.preview_executor import WorkflowPreviewExecutor
+from app.models.preview import NodePreviewRequest, NodePreviewResponse
 from app.models.requests import (
     ExecutionResult,
     GenerateWorkflowRequest,
@@ -61,6 +63,25 @@ async def execute_workflow(
     )
 
     return ExecutionResult(execution_id=execution_id)
+
+
+@router.post("/{workflow_id}/nodes/{node_id}/preview")
+async def preview_node(
+    workflow_id: str,
+    node_id: str,
+    request: NodePreviewRequest,
+    _user_id: str = Depends(get_user_id),
+) -> NodePreviewResponse:
+    """저장 없이 하나의 노드 미리보기 데이터를 반환합니다."""
+    executor = WorkflowPreviewExecutor()
+    return await executor.preview_node(
+        workflow_id=workflow_id,
+        node_id=node_id,
+        nodes=request.workflow.nodes,
+        service_tokens=request.service_tokens,
+        limit=request.limit,
+        include_content=request.include_content,
+    )
 
 
 @router.post("/generate")

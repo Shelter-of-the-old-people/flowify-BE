@@ -35,6 +35,15 @@ class GoogleDriveService(BaseIntegrationService):
         )
         return data.get("files", [])
 
+    async def get_file_metadata(self, token: str, file_id: str) -> dict:
+        """Return Drive file metadata without downloading content."""
+        return await self._request(
+            "GET",
+            f"{DRIVE_API}/files/{file_id}",
+            token,
+            params={"fields": ("id,name,mimeType,size,createdTime,modifiedTime,webViewLink")},
+        )
+
     async def download_file(self, token: str, file_id: str) -> dict:
         """Return Drive file metadata and text-like content."""
         meta = await self._request(
@@ -97,12 +106,16 @@ class GoogleDriveService(BaseIntegrationService):
 
         boundary = f"flowify_{uuid4().hex}"
         body = (
-            f"--{boundary}\r\n"
-            "Content-Type: application/json; charset=UTF-8\r\n\r\n"
-            f"{json.dumps(metadata)}\r\n"
-            f"--{boundary}\r\n"
-            f"Content-Type: {mime_type}\r\n\r\n"
-        ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
+            (
+                f"--{boundary}\r\n"
+                "Content-Type: application/json; charset=UTF-8\r\n\r\n"
+                f"{json.dumps(metadata)}\r\n"
+                f"--{boundary}\r\n"
+                f"Content-Type: {mime_type}\r\n\r\n"
+            ).encode()
+            + content
+            + f"\r\n--{boundary}--\r\n".encode()
+        )
 
         return await self._request(
             "POST",
