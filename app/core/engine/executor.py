@@ -2,6 +2,7 @@ import asyncio
 from collections import defaultdict, deque
 import copy
 from datetime import UTC, datetime
+from pathlib import Path
 import traceback
 from typing import Any
 import uuid
@@ -13,6 +14,7 @@ from app.config import settings
 from app.core.engine.snapshot import SnapshotManager
 from app.core.engine.state import WorkflowState, WorkflowStateManager
 from app.core.nodes.factory import NodeFactory
+from app.core.nodes.output_node import ACCEPTED_INPUT_TYPES
 from app.models.execution import (
     ErrorDetail,
     NodeExecutionLog,
@@ -189,12 +191,16 @@ class WorkflowExecutor:
                         )
 
                     body_node_def = node_map[body_node_id]
+                    downstream_nodes = self._get_direct_downstream_nodes(
+                        body_node_id, edges, node_map
+                    )
                     aggregate_log = await self._execute_loop_body(
                         loop_node_def=node_def,
                         body_node_def=body_node_def,
                         loop_output=loop_output,
                         service_tokens=service_tokens,
                         snapshot_manager=snapshot_manager,
+                        downstream_nodes=downstream_nodes,
                     )
                     execution.nodeLogs.append(aggregate_log)
 
@@ -214,7 +220,9 @@ class WorkflowExecutor:
                         state_manager.transition(WorkflowState.ROLLBACK_AVAILABLE)
                         execution.state = WorkflowState.ROLLBACK_AVAILABLE
                         execution.errorMessage = (
-                            aggregate_log.error.message if aggregate_log.error else "Loop body execution failed"
+                            aggregate_log.error.message
+                            if aggregate_log.error
+                            else "Loop body execution failed"
                         )
                         execution.finishedAt = datetime.now(UTC)
                         await self._finalize_execution(execution_id, execution)
@@ -402,6 +410,18 @@ class WorkflowExecutor:
         return adj
 
     @staticmethod
+    def _get_direct_downstream_nodes(
+        node_id: str,
+        edges: list[EdgeDefinition],
+        node_map: dict[str, NodeDefinition],
+    ) -> list[NodeDefinition]:
+        return [
+            node_map[edge.target]
+            for edge in edges
+            if edge.source == node_id and edge.target in node_map
+        ]
+
+    @staticmethod
     def _build_branch_map(
         nodes: list[NodeDefinition], edges: list[EdgeDefinition]
     ) -> dict[str, dict[str, str]]:
@@ -448,9 +468,7 @@ class WorkflowExecutor:
     # ── Loop helpers ──
 
     @staticmethod
-    def _resolve_loop_body_node_id(
-        loop_node_id: str, edges: list[EdgeDefinition]
-    ) -> str:
+    def _resolve_loop_body_node_id(loop_node_id: str, edges: list[EdgeDefinition]) -> str:
         """Loop 노드의 첫 번째 outgoing target을 body node로 반환한다.
 
         v1 제약: outgoing edge가 정확히 1개여야 한다.
@@ -507,7 +525,10 @@ class WorkflowExecutor:
         )
 
     @staticmethod
-    def _aggregate_loop_outputs(results: list[dict[str, Any]]) -> dict[str, Any]:
+    def _aggregate_loop_outputs(
+        results: list[dict[str, Any]],
+        preserve_text_as_file_list: bool = False,
+    ) -> dict[str, Any]:
         """Body node 반복 결과를 기존 canonical type으로 집계한다."""
         if not results:
             return {"type": "TEXT", "content": "", "loop_results": [], "iterations": 0}
@@ -525,6 +546,17 @@ class WorkflowExecutor:
         iterations = len(results)
 
         if output_type == "TEXT":
+            if preserve_text_as_file_list:
+                return {
+                    "type": "FILE_LIST",
+                    "items": [
+                        WorkflowExecutor._text_result_to_file_item(result, idx)
+                        for idx, result in enumerate(results, start=1)
+                    ],
+                    "loop_results": results,
+                    "iterations": iterations,
+                }
+
             parts = []
             for idx, r in enumerate(results, start=1):
                 parts.append(f"{idx}. {r.get('content', '')}")
@@ -571,6 +603,57 @@ class WorkflowExecutor:
             "iterations": iterations,
         }
 
+    @staticmethod
+    def _should_preserve_text_results_as_file_list(
+        downstream_nodes: list[NodeDefinition],
+    ) -> bool:
+        if not downstream_nodes:
+            return False
+
+        for node in downstream_nodes:
+            runtime_type = getattr(node, "runtime_type", None) or node.type
+            if runtime_type != "output":
+                return False
+
+            runtime_sink = getattr(node, "runtime_sink", None)
+            if runtime_sink is None:
+                return False
+
+            accepted_types = ACCEPTED_INPUT_TYPES.get(runtime_sink.service, set())
+            if "FILE_LIST" not in accepted_types:
+                return False
+
+        return True
+
+    @staticmethod
+    def _text_result_to_file_item(result: dict[str, Any], index: int) -> dict[str, Any]:
+        source_filename = result.get("filename") or f"loop-result-{index}"
+        item: dict[str, Any] = {
+            "filename": WorkflowExecutor._to_text_result_filename(str(source_filename), index),
+            "mime_type": "text/plain",
+            "content": result.get("content", ""),
+        }
+
+        passthrough_keys = {
+            "file_id": "source_file_id",
+            "filename": "source_filename",
+            "mime_type": "source_mime_type",
+            "url": "source_url",
+            "created_time": "source_created_time",
+            "modified_time": "source_modified_time",
+        }
+        for source_key, target_key in passthrough_keys.items():
+            value = result.get(source_key)
+            if value not in (None, ""):
+                item[target_key] = value
+
+        return item
+
+    @staticmethod
+    def _to_text_result_filename(source_filename: str, index: int) -> str:
+        stem = Path(source_filename).stem or f"loop-result-{index}"
+        return f"{index:03d}-{stem}.txt"
+
     async def _execute_loop_body(
         self,
         loop_node_def: NodeDefinition,
@@ -578,6 +661,7 @@ class WorkflowExecutor:
         loop_output: dict[str, Any],
         service_tokens: dict[str, str],
         snapshot_manager: "SnapshotManager",
+        downstream_nodes: list[NodeDefinition] | None = None,
     ) -> NodeExecutionLog:
         """Loop body node를 items 수만큼 반복 실행하고 aggregate log를 반환."""
         started_at = datetime.now(UTC)
@@ -600,9 +684,7 @@ class WorkflowExecutor:
 
         for idx, item in enumerate(items):
             try:
-                item_payload = self._to_loop_item_payload(
-                    source_type, item_type, item, loop_output
-                )
+                item_payload = self._to_loop_item_payload(source_type, item_type, item, loop_output)
             except FlowifyException as e:
                 return NodeExecutionLog(
                     nodeId=body_node_def.id,
@@ -653,7 +735,13 @@ class WorkflowExecutor:
 
         # 집계
         try:
-            aggregate_output = self._aggregate_loop_outputs(body_results)
+            preserve_text_as_file_list = self._should_preserve_text_results_as_file_list(
+                downstream_nodes or []
+            )
+            aggregate_output = self._aggregate_loop_outputs(
+                body_results,
+                preserve_text_as_file_list=preserve_text_as_file_list,
+            )
         except FlowifyException as e:
             return NodeExecutionLog(
                 nodeId=body_node_def.id,
