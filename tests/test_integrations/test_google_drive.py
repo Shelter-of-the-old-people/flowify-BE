@@ -2,8 +2,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.services.integrations.google_drive import DRIVE_API, DRIVE_FOLDER_MIME_TYPE
-from app.services.integrations.google_drive import GoogleDriveService
+from app.services.integrations.google_drive import (
+    DRIVE_API,
+    DRIVE_FOLDER_MIME_TYPE,
+    GoogleDriveService,
+)
 
 
 @pytest.mark.asyncio
