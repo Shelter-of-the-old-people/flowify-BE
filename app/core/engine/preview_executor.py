@@ -122,12 +122,11 @@ class WorkflowPreviewExecutor:
         svc = GoogleDriveService()
 
         if mode == "single_file":
-            if include_content:
-                file_data = await svc.download_file(token, target)
-                return self._to_drive_single_file(file_data, include_content=True)
-
             metadata = await svc.get_file_metadata(token, target)
-            return self._to_drive_single_file(metadata, include_content=False)
+            payload = self._to_drive_single_file(metadata, include_content=False)
+            if include_content:
+                await self._attach_drive_text_preview(svc, token, payload)
+            return payload
 
         if mode in ("file_changed", "new_file", "folder_new_file"):
             files = await svc.list_files(
@@ -135,19 +134,24 @@ class WorkflowPreviewExecutor:
                 folder_id=target,
                 max_results=1,
                 order_by="createdTime desc",
+                include_folders=False,
             )
             if not files:
                 return self._empty_single_file()
 
             latest_file = files[0]
+            payload = self._to_drive_single_file(latest_file, include_content=False)
             if include_content:
-                file_data = await svc.download_file(token, latest_file["id"])
-                return self._to_drive_single_file(file_data, include_content=True)
-
-            return self._to_drive_single_file(latest_file, include_content=False)
+                await self._attach_drive_text_preview(svc, token, payload)
+            return payload
 
         if mode == "folder_all_files":
-            files = await svc.list_files(token, folder_id=target, max_results=limit)
+            files = await svc.list_files(
+                token,
+                folder_id=target,
+                max_results=limit,
+                include_folders=False,
+            )
             return {
                 "type": "FILE_LIST",
                 "items": [self._to_drive_file_item(file_item) for file_item in files],
@@ -276,9 +280,12 @@ class WorkflowPreviewExecutor:
         file_id = file_data.get("id", "")
         result = {
             "type": "SINGLE_FILE",
+            "source_service": "google_drive",
             "file_id": file_id,
             "filename": file_data.get("name", ""),
-            "content": file_data.get("content") if include_content else None,
+            "content": None,
+            "extracted_text": file_data.get("extracted_text") if include_content else None,
+            "extraction_status": file_data.get("extraction_status", "not_requested"),
             "mime_type": file_data.get("mimeType", ""),
             "size": file_data.get("size"),
             "created_time": file_data.get("createdTime", ""),
@@ -291,6 +298,7 @@ class WorkflowPreviewExecutor:
     def _to_drive_file_item(file_data: dict[str, Any]) -> dict[str, Any]:
         file_id = file_data.get("id", "")
         return {
+            "source_service": "google_drive",
             "file_id": file_id,
             "filename": file_data.get("name", ""),
             "mime_type": file_data.get("mimeType", ""),
@@ -304,14 +312,35 @@ class WorkflowPreviewExecutor:
     def _empty_single_file() -> dict[str, Any]:
         return {
             "type": "SINGLE_FILE",
+            "source_service": "google_drive",
             "file_id": "",
             "filename": "",
             "content": None,
+            "extracted_text": None,
+            "extraction_status": "not_requested",
             "mime_type": "",
+            "size": None,
             "url": "",
             "created_time": "",
             "modified_time": "",
         }
+
+    @staticmethod
+    async def _attach_drive_text_preview(
+        svc: GoogleDriveService,
+        token: str,
+        payload: dict[str, Any],
+    ) -> None:
+        extraction = await svc.extract_file_text(
+            token,
+            payload.get("file_id", ""),
+            payload.get("mime_type", ""),
+        )
+        payload["extracted_text"] = extraction.get("text") or None
+        payload["extraction_status"] = extraction.get("status", "failed")
+        payload["truncated"] = extraction.get("truncated", False)
+        if extraction.get("error"):
+            payload["extraction_error"] = extraction["error"]
 
     @staticmethod
     def _to_single_email(msg: dict[str, Any], include_content: bool) -> dict[str, Any]:

@@ -110,17 +110,8 @@ class InputNodeStrategy(NodeStrategy):
         svc = GoogleDriveService()
 
         if mode == "single_file":
-            file_data = await svc.download_file(token, target)
-            return {
-                "type": "SINGLE_FILE",
-                "file_id": target,
-                "filename": file_data.get("name", ""),
-                "content": file_data.get("content", ""),
-                "mime_type": file_data.get("mimeType", ""),
-                "created_time": file_data.get("createdTime", ""),
-                "modified_time": file_data.get("modifiedTime", ""),
-                "url": f"https://drive.google.com/file/d/{target}",
-            }
+            metadata = await svc.get_file_metadata(token, target)
+            return self._to_drive_single_file(metadata, target)
 
         if mode in ("file_changed", "new_file", "folder_new_file"):
             files = await svc.list_files(
@@ -128,54 +119,70 @@ class InputNodeStrategy(NodeStrategy):
                 folder_id=target,
                 max_results=1,
                 order_by="createdTime desc",
+                include_folders=False,
             )
             if not files:
                 return {
                     "type": "SINGLE_FILE",
+                    "source_service": "google_drive",
                     "file_id": "",
                     "filename": "",
-                    "content": "",
+                    "content": None,
+                    "extracted_text": None,
+                    "extraction_status": "not_requested",
                     "mime_type": "",
+                    "size": None,
                     "url": "",
                     "created_time": "",
                     "modified_time": "",
                 }
 
             latest_file = files[0]
-            file_data = await svc.download_file(token, latest_file["id"])
-            return {
-                "type": "SINGLE_FILE",
-                "file_id": latest_file["id"],
-                "filename": latest_file.get("name", ""),
-                "content": file_data.get("content", ""),
-                "mime_type": latest_file.get("mimeType", ""),
-                "created_time": latest_file.get("createdTime", ""),
-                "modified_time": latest_file.get("modifiedTime", ""),
-                "url": f"https://drive.google.com/file/d/{latest_file['id']}",
-            }
+            return self._to_drive_single_file(latest_file)
 
         if mode == "folder_all_files":
-            files = await svc.list_files(token, folder_id=target)
+            files = await svc.list_files(token, folder_id=target, include_folders=False)
             return {
                 "type": "FILE_LIST",
-                "items": [
-                    {
-                        "file_id": drive_file.get("id", ""),
-                        "filename": drive_file.get("name", ""),
-                        "mime_type": drive_file.get("mimeType", ""),
-                        "size": drive_file.get("size"),
-                        "created_time": drive_file.get("createdTime", ""),
-                        "modified_time": drive_file.get("modifiedTime", ""),
-                        "url": f"https://drive.google.com/file/d/{drive_file['id']}",
-                    }
-                    for drive_file in files
-                ],
+                "items": [self._to_drive_file_item(drive_file) for drive_file in files],
             }
 
         raise FlowifyException(
             ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
             detail=f"service=google_drive, mode={mode} is not supported",
         )
+
+    @staticmethod
+    def _to_drive_single_file(file_data: dict[str, Any], fallback_file_id: str = "") -> dict[str, Any]:
+        file_id = file_data.get("id") or fallback_file_id
+        return {
+            "type": "SINGLE_FILE",
+            "source_service": "google_drive",
+            "file_id": file_id,
+            "filename": file_data.get("name", ""),
+            "content": None,
+            "extracted_text": None,
+            "extraction_status": "not_requested",
+            "mime_type": file_data.get("mimeType", ""),
+            "size": file_data.get("size"),
+            "created_time": file_data.get("createdTime", ""),
+            "modified_time": file_data.get("modifiedTime", ""),
+            "url": file_data.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}",
+        }
+
+    @staticmethod
+    def _to_drive_file_item(file_data: dict[str, Any]) -> dict[str, Any]:
+        file_id = file_data.get("id", "")
+        return {
+            "source_service": "google_drive",
+            "file_id": file_id,
+            "filename": file_data.get("name", ""),
+            "mime_type": file_data.get("mimeType", ""),
+            "size": file_data.get("size"),
+            "created_time": file_data.get("createdTime", ""),
+            "modified_time": file_data.get("modifiedTime", ""),
+            "url": file_data.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}",
+        }
 
     # Gmail
 
