@@ -348,6 +348,92 @@ async def test_extract_text_from_single_file_includes_metadata():
     assert "문서 본문" in call_args
 
 
+async def test_extract_text_from_google_drive_file_uses_lazy_extraction():
+    with (
+        patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls,
+        patch("app.core.nodes.llm_node.GoogleDriveService") as mock_drive_cls,
+    ):
+        mock_instance = mock_svc_cls.return_value
+        mock_instance.summarize = AsyncMock(return_value="요약")
+        mock_drive = mock_drive_cls.return_value
+        mock_drive.extract_file_text = AsyncMock(
+            return_value={
+                "text": "드라이브 파일 본문",
+                "status": "success",
+                "truncated": False,
+                "error": None,
+            }
+        )
+
+        from app.core.nodes.llm_node import LLMNodeStrategy
+
+        node = LLMNodeStrategy(config={"action": "summarize"})
+        node._llm_service = mock_instance
+
+        await node.execute(
+            node=_node(runtime_config={"action": "summarize"}),
+            input_data={
+                "type": "SINGLE_FILE",
+                "source_service": "google_drive",
+                "file_id": "file_latest",
+                "filename": "latest.pdf",
+                "mime_type": "application/pdf",
+                "content": None,
+            },
+            service_tokens={"google_drive": "token"},
+        )
+
+    call_args = mock_instance.summarize.call_args[0][0]
+    assert "Filename: latest.pdf" in call_args
+    assert "드라이브 파일 본문" in call_args
+    mock_drive.extract_file_text.assert_awaited_once_with(
+        "token",
+        "file_latest",
+        "application/pdf",
+    )
+
+
+async def test_extract_text_from_google_drive_file_uses_failure_message():
+    with (
+        patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls,
+        patch("app.core.nodes.llm_node.GoogleDriveService") as mock_drive_cls,
+    ):
+        mock_instance = mock_svc_cls.return_value
+        mock_instance.summarize = AsyncMock(return_value="요약")
+        mock_drive = mock_drive_cls.return_value
+        mock_drive.extract_file_text = AsyncMock(
+            return_value={
+                "text": "",
+                "status": "unsupported",
+                "truncated": False,
+                "error": None,
+            }
+        )
+
+        from app.core.nodes.llm_node import LLMNodeStrategy
+
+        node = LLMNodeStrategy(config={"action": "summarize"})
+        node._llm_service = mock_instance
+
+        await node.execute(
+            node=_node(runtime_config={"action": "summarize"}),
+            input_data={
+                "type": "SINGLE_FILE",
+                "source_service": "google_drive",
+                "file_id": "file_latest",
+                "filename": "latest.bin",
+                "mime_type": "application/octet-stream",
+                "content": None,
+            },
+            service_tokens={"google_drive": "token"},
+        )
+
+    call_args = mock_instance.summarize.call_args[0][0]
+    assert "File content could not be extracted." in call_args
+    assert "Status: unsupported" in call_args
+    assert "%PDF" not in call_args
+
+
 async def test_extract_text_from_file_list_includes_metadata():
     with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
         mock_instance = mock_svc_cls.return_value

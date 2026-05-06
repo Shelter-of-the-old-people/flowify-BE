@@ -5,6 +5,7 @@ from typing import Any
 
 from app.common.errors import ErrorCode, FlowifyException
 from app.core.nodes.base import NodeStrategy
+from app.services.integrations.google_drive import GoogleDriveService
 from app.services.llm_service import LLMService
 
 PROMPT_REQUIRED_ACTIONS = frozenset({"process", "extract", "translate", "custom"})
@@ -32,7 +33,7 @@ class LLMNodeStrategy(NodeStrategy):
 
         self._ensure_executable_prompt(node, action, output_data_type, prompt)
 
-        text = self._extract_text_from_canonical(input_data)
+        text = await self._resolve_llm_input_text(input_data, service_tokens)
 
         if output_data_type == "SPREADSHEET_DATA":
             result = await self._llm_service.process_json(prompt, context=text)
@@ -63,6 +64,50 @@ class LLMNodeStrategy(NodeStrategy):
         """runtime_config와 fallback config에서 프롬프트를 조회합니다."""
         prompt = runtime_config.get("prompt") or self.config.get("prompt", "")
         return str(prompt).strip()
+
+    async def _resolve_llm_input_text(
+        self,
+        input_data: dict | None,
+        service_tokens: dict[str, str],
+    ) -> str:
+        if not input_data:
+            return ""
+
+        if input_data.get("type") == "SINGLE_FILE":
+            return await self._resolve_single_file_text(input_data, service_tokens)
+
+        return self._extract_text_from_canonical(input_data)
+
+    async def _resolve_single_file_text(
+        self,
+        input_data: dict[str, Any],
+        service_tokens: dict[str, str],
+    ) -> str:
+        extracted_text = input_data.get("extracted_text")
+        if extracted_text:
+            return self._format_single_file_text(input_data, str(extracted_text))
+
+        content = input_data.get("content")
+        if content:
+            return self._format_single_file_text(input_data, str(content))
+
+        if input_data.get("source_service") == "google_drive" and input_data.get("file_id"):
+            token = service_tokens.get("google_drive", "")
+            if token:
+                svc = GoogleDriveService()
+                extraction = await svc.extract_file_text(
+                    token,
+                    input_data["file_id"],
+                    input_data.get("mime_type", ""),
+                )
+                if extraction.get("text"):
+                    return self._format_single_file_text(input_data, extraction["text"])
+                return self._format_single_file_text(
+                    input_data,
+                    self._format_extraction_failure(extraction),
+                )
+
+        return self._format_single_file_metadata(input_data)
 
     def _ensure_executable_prompt(
         self,
@@ -100,17 +145,10 @@ class LLMNodeStrategy(NodeStrategy):
         if data_type == "TEXT":
             return input_data.get("content", "")
         if data_type == "SINGLE_FILE":
-            parts = [
-                f"Filename: {input_data.get('filename', '')}",
-                f"MIME Type: {input_data.get('mime_type', '')}",
-            ]
-            if input_data.get("created_time"):
-                parts.append(f"Created Time: {input_data.get('created_time', '')}")
-            if input_data.get("url"):
-                parts.append(f"Source URL: {input_data.get('url', '')}")
-            parts.append("")
-            parts.append(input_data.get("content", ""))
-            return "\n".join(parts).strip()
+            return LLMNodeStrategy._format_single_file_text(
+                input_data,
+                str(input_data.get("content") or ""),
+            )
         if data_type == "SINGLE_EMAIL":
             return f"Subject: {input_data.get('subject', '')}\n\n{input_data.get('body', '')}"
         if data_type == "SPREADSHEET_DATA":
@@ -150,6 +188,37 @@ class LLMNodeStrategy(NodeStrategy):
 
         # Fallback: serialize the whole payload.
         return json.dumps(input_data, ensure_ascii=False, default=str)
+
+    @staticmethod
+    def _format_single_file_metadata(input_data: dict[str, Any]) -> str:
+        parts = [
+            f"Filename: {input_data.get('filename', '')}",
+            f"MIME Type: {input_data.get('mime_type', '')}",
+        ]
+        if input_data.get("created_time"):
+            parts.append(f"Created Time: {input_data.get('created_time', '')}")
+        if input_data.get("url"):
+            parts.append(f"Source URL: {input_data.get('url', '')}")
+        return "\n".join(parts).strip()
+
+    @staticmethod
+    def _format_single_file_text(input_data: dict[str, Any], text: str) -> str:
+        metadata = LLMNodeStrategy._format_single_file_metadata(input_data)
+        if not text:
+            return metadata
+        return f"{metadata}\n\n{text}".strip()
+
+    @staticmethod
+    def _format_extraction_failure(extraction: dict[str, Any]) -> str:
+        status = extraction.get("status", "failed")
+        reason = extraction.get("error") or "unsupported"
+        return "\n".join(
+            [
+                "File content could not be extracted.",
+                f"Status: {status}",
+                f"Reason: {reason}",
+            ]
+        )
 
     @staticmethod
     def _format_file_list_item(item: dict[str, Any]) -> str:
