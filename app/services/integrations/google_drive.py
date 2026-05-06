@@ -1,11 +1,23 @@
+import io
 import json
 from uuid import uuid4
 
+import httpx
+
+from app.common.errors import ErrorCode, FlowifyException
 from app.services.integrations.base import BaseIntegrationService
 
 DRIVE_API = "https://www.googleapis.com/drive/v3"
 DRIVE_UPLOAD_API = "https://www.googleapis.com/upload/drive/v3"
 DRIVE_FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
+GOOGLE_EXPORT_MIME_TYPES = {
+    "application/vnd.google-apps.document": "text/plain",
+    "application/vnd.google-apps.spreadsheet": "text/csv",
+    "application/vnd.google-apps.presentation": "text/plain",
+}
+TEXT_MIME_PREFIXES = ("text/",)
+TEXT_MIME_TYPES = {"application/json", "application/xml"}
+MAX_EXTRACTED_TEXT_CHARS = 60000
 
 
 class GoogleDriveService(BaseIntegrationService):
@@ -17,9 +29,15 @@ class GoogleDriveService(BaseIntegrationService):
         folder_id: str | None = None,
         max_results: int = 50,
         order_by: str | None = None,
+        include_folders: bool = False,
     ) -> list[dict]:
         """List files in a Drive folder."""
-        query = f"'{folder_id}' in parents and trashed=false" if folder_id else "trashed=false"
+        query_parts = ["trashed=false"]
+        if folder_id:
+            query_parts.append(f"'{folder_id}' in parents")
+        if not include_folders:
+            query_parts.append(f"mimeType != '{DRIVE_FOLDER_MIME_TYPE}'")
+        query = " and ".join(query_parts)
         params = {
             "q": query,
             "pageSize": max_results,
@@ -54,18 +72,12 @@ class GoogleDriveService(BaseIntegrationService):
         )
         mime = meta.get("mimeType", "")
 
-        export_map = {
-            "application/vnd.google-apps.document": "text/plain",
-            "application/vnd.google-apps.spreadsheet": "text/csv",
-            "application/vnd.google-apps.presentation": "text/plain",
-        }
-
-        if mime in export_map:
+        if mime in GOOGLE_EXPORT_MIME_TYPES:
             content = await self._request(
                 "GET",
                 f"{DRIVE_API}/files/{file_id}/export",
                 token,
-                params={"mimeType": export_map[mime]},
+                params={"mimeType": GOOGLE_EXPORT_MIME_TYPES[mime]},
             )
         else:
             content = await self._request(
@@ -90,6 +102,64 @@ class GoogleDriveService(BaseIntegrationService):
             "modifiedTime": meta.get("modifiedTime", ""),
             "content": normalized_content,
         }
+
+    async def download_file_bytes(self, token: str, file_id: str) -> bytes:
+        """Download original Drive file bytes."""
+        return await self._request_bytes(
+            token,
+            f"{DRIVE_API}/files/{file_id}",
+            params={"alt": "media"},
+        )
+
+    async def extract_file_text(self, token: str, file_id: str, mime_type: str) -> dict:
+        """Extract text for LLM input without storing original file bytes."""
+        try:
+            if mime_type in GOOGLE_EXPORT_MIME_TYPES:
+                raw = await self._request_bytes(
+                    token,
+                    f"{DRIVE_API}/files/{file_id}/export",
+                    params={"mimeType": GOOGLE_EXPORT_MIME_TYPES[mime_type]},
+                )
+                return self._text_result(raw.decode("utf-8", errors="replace"))
+
+            raw = await self.download_file_bytes(token, file_id)
+            if self._is_text_mime_type(mime_type):
+                return self._text_result(raw.decode("utf-8", errors="replace"))
+            if mime_type == "application/pdf":
+                return self._text_result(self._extract_pdf_text(raw))
+            return self._extraction_result(status="unsupported")
+        except FlowifyException:
+            raise
+        except Exception as e:
+            return self._extraction_result(status="failed", error=str(e))
+
+    async def _request_bytes(
+        self,
+        token: str,
+        url: str,
+        params: dict | None = None,
+    ) -> bytes:
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        try:
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                response = await client.get(url, headers=headers, params=params)
+
+            if response.status_code == 401:
+                raise FlowifyException(
+                    ErrorCode.OAUTH_TOKEN_INVALID,
+                    detail="OAuth token is invalid.",
+                    context={"url": url, "status": 401},
+                )
+            response.raise_for_status()
+            return response.content
+        except FlowifyException:
+            raise
+        except Exception as e:
+            raise FlowifyException(
+                ErrorCode.EXTERNAL_API_ERROR,
+                detail=f"Google Drive file download failed: {url}",
+                context={"url": url, "error": str(e)},
+            ) from e
 
     async def upload_file(
         self,
@@ -196,3 +266,39 @@ class GoogleDriveService(BaseIntegrationService):
             json=metadata,
             params={"fields": "id,name,mimeType,webViewLink"},
         )
+
+    @staticmethod
+    def _is_text_mime_type(mime_type: str) -> bool:
+        return mime_type.startswith(TEXT_MIME_PREFIXES) or mime_type in TEXT_MIME_TYPES
+
+    @staticmethod
+    def _extract_pdf_text(raw: bytes) -> str:
+        from pypdf import PdfReader
+
+        reader = PdfReader(io.BytesIO(raw))
+        return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+
+    @staticmethod
+    def _text_result(text: str) -> dict:
+        truncated = len(text) > MAX_EXTRACTED_TEXT_CHARS
+        if truncated:
+            text = text[:MAX_EXTRACTED_TEXT_CHARS]
+        return GoogleDriveService._extraction_result(
+            text=text,
+            status="truncated" if truncated else "success",
+            truncated=truncated,
+        )
+
+    @staticmethod
+    def _extraction_result(
+        text: str = "",
+        status: str = "success",
+        truncated: bool = False,
+        error: str | None = None,
+    ) -> dict:
+        return {
+            "text": text,
+            "status": status,
+            "truncated": truncated,
+            "error": error,
+        }
