@@ -395,6 +395,12 @@ class OutputNodeStrategy(NodeStrategy):
         input_data: dict[str, Any],
         service_tokens: dict[str, str],
     ) -> bytes:
+        if input_data.get("source_service") == "google_drive" and input_data.get("file_id"):
+            token = service_tokens.get("google_drive", "")
+            if token:
+                svc = GoogleDriveService()
+                return await svc.download_file_bytes(token, input_data["file_id"])
+
         content = input_data.get("content")
         if content is not None:
             return self._to_bytes(content)
@@ -412,6 +418,12 @@ class OutputNodeStrategy(NodeStrategy):
         service_tokens: dict[str, str],
     ) -> tuple[str, str, bytes]:
         mime_type = item.get("mime_type") or "application/octet-stream"
+        if item.get("source_service") == "google_drive" and item.get("file_id"):
+            token = service_tokens.get("google_drive", "")
+            if token:
+                svc = GoogleDriveService()
+                return filename, mime_type, await svc.download_file_bytes(token, item["file_id"])
+
         content = item.get("content")
         if content is not None:
             return filename, mime_type, self._to_bytes(content)

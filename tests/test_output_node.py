@@ -395,6 +395,81 @@ async def test_google_drive_single_file_downloads_canvas_url(service_tokens: dic
     )
 
 
+async def test_google_drive_single_file_uses_drive_source_bytes(service_tokens: dict) -> None:
+    strategy = OutputNodeStrategy({})
+    node = _sink_node("google_drive", folder_id="folder_123")
+    input_data = {
+        "type": "SINGLE_FILE",
+        "source_service": "google_drive",
+        "file_id": "file_123",
+        "filename": "lecture.pdf",
+        "mime_type": "application/pdf",
+        "content": "%PDF raw text should not be uploaded",
+        "url": "https://drive.google.com/file/d/file_123",
+    }
+
+    with patch("app.core.nodes.output_node.GoogleDriveService") as mock_drive_class:
+        mock_drive = mock_drive_class.return_value
+        mock_drive.download_file_bytes = AsyncMock(return_value=b"%PDF-1.7 real bytes")
+        mock_drive.upload_file = AsyncMock(return_value={"id": "drive_1", "name": "lecture.pdf"})
+
+        result = await strategy.execute(node, input_data, service_tokens)
+
+    assert result == {
+        "status": "sent",
+        "service": "google_drive",
+        "detail": {"id": "drive_1", "name": "lecture.pdf"},
+    }
+    mock_drive.download_file_bytes.assert_awaited_once_with(
+        service_tokens["google_drive"],
+        "file_123",
+    )
+    mock_drive.upload_file.assert_awaited_once_with(
+        service_tokens["google_drive"],
+        "lecture.pdf",
+        b"%PDF-1.7 real bytes",
+        "folder_123",
+        "application/pdf",
+    )
+
+
+async def test_google_drive_file_list_uses_drive_source_bytes(service_tokens: dict) -> None:
+    strategy = OutputNodeStrategy({})
+    node = _sink_node("google_drive", folder_id="folder_123")
+    input_data = {
+        "type": "FILE_LIST",
+        "items": [
+            {
+                "source_service": "google_drive",
+                "file_id": "file_1",
+                "filename": "a.pdf",
+                "mime_type": "application/pdf",
+                "content": "%PDF raw text should not be uploaded",
+            }
+        ],
+    }
+
+    with patch("app.core.nodes.output_node.GoogleDriveService") as mock_drive_class:
+        mock_drive = mock_drive_class.return_value
+        mock_drive.download_file_bytes = AsyncMock(return_value=b"real-pdf")
+        mock_drive.upload_file = AsyncMock(return_value={"id": "drive_1", "name": "a.pdf"})
+
+        result = await strategy.execute(node, input_data, service_tokens)
+
+    assert result["detail"]["count"] == 1
+    mock_drive.download_file_bytes.assert_awaited_once_with(
+        service_tokens["google_drive"],
+        "file_1",
+    )
+    mock_drive.upload_file.assert_awaited_once_with(
+        service_tokens["google_drive"],
+        "a.pdf",
+        b"real-pdf",
+        "folder_123",
+        "application/pdf",
+    )
+
+
 async def test_google_drive_spreadsheet_data_uploads_csv(service_tokens: dict) -> None:
     strategy = OutputNodeStrategy({})
     node = _sink_node("google_drive", folder_id="folder_123")
