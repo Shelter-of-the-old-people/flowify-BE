@@ -100,6 +100,7 @@ class WorkflowExecutor:
 
         # v2: 노드별 출력을 canonical payload로 관리
         node_outputs: dict[str, dict[str, Any]] = {}
+        edge_outputs: dict[tuple[str, str], dict[str, Any]] = {}
         skipped_nodes: set[str] = set()
         handled_nodes: set[str] = set()
 
@@ -141,10 +142,12 @@ class WorkflowExecutor:
                 node_def = node_map[node_id]
 
                 # v2: predecessor의 canonical payload를 input_data로 전달
-                prev_node_ids = self._get_predecessors(node_id, edges)
-                input_data: dict[str, Any] | None = None
-                if prev_node_ids:
-                    input_data = node_outputs.get(prev_node_ids[0])
+                input_data = self._resolve_input_data(
+                    node_id,
+                    edges,
+                    node_outputs,
+                    edge_outputs,
+                )
 
                 node_log = await self._execute_node(
                     node_def, input_data, service_tokens, snapshot_manager
@@ -234,19 +237,30 @@ class WorkflowExecutor:
 
                 # IfElse 분기 처리: branch 값에 따라 반대쪽 서브트리 skip
                 output_data = node_outputs[node_id]
-                if (
-                    runtime_type == "if_else"
-                    and isinstance(output_data, dict)
-                    and "branch" in output_data
-                ):
-                    branch_value = output_data["branch"]  # "true" or "false"
-                    skip_value = "false" if branch_value == "true" else "true"
-                    if node_id in branch_map:
-                        skip_target = branch_map[node_id].get(skip_value)
-                        if skip_target:
-                            descendants = self._get_descendants(skip_target, adjacency)
-                            skipped_nodes.update(descendants)
-                            skipped_nodes.add(skip_target)
+                if runtime_type == "if_else" and isinstance(output_data, dict):
+                    if isinstance(output_data.get("branch_outputs"), dict):
+                        (
+                            branch_edge_outputs,
+                            active_targets,
+                            inactive_targets,
+                        ) = self._build_multi_branch_edge_outputs(node_id, output_data, edges)
+                        edge_outputs.update(branch_edge_outputs)
+                        skipped_nodes.update(
+                            self._resolve_multi_branch_skipped_nodes(
+                                active_targets,
+                                inactive_targets,
+                                adjacency,
+                            )
+                        )
+                    elif output_data.get("branch") in ("true", "false"):
+                        branch_value = output_data["branch"]
+                        skip_value = "false" if branch_value == "true" else "true"
+                        if node_id in branch_map:
+                            skip_target = branch_map[node_id].get(skip_value)
+                            if skip_target:
+                                descendants = self._get_descendants(skip_target, adjacency)
+                                skipped_nodes.update(descendants)
+                                skipped_nodes.add(skip_target)
 
             state_manager.transition(WorkflowState.SUCCESS)
             execution.state = WorkflowState.SUCCESS
@@ -372,6 +386,94 @@ class WorkflowExecutor:
     def _get_predecessors(node_id: str, edges: list[EdgeDefinition]) -> list[str]:
         """주어진 노드의 선행 노드 ID 목록을 반환."""
         return [e.source for e in edges if e.target == node_id]
+
+    @staticmethod
+    def _resolve_input_data(
+        node_id: str,
+        edges: list[EdgeDefinition],
+        node_outputs: dict[str, dict[str, Any]],
+        edge_outputs: dict[tuple[str, str], dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """Resolve incoming canonical payload for a node."""
+        incoming_edges = [edge for edge in edges if edge.target == node_id]
+        for edge in incoming_edges:
+            edge_payload = edge_outputs.get((edge.source, edge.target))
+            if edge_payload is not None:
+                return edge_payload
+
+        for edge in incoming_edges:
+            node_payload = node_outputs.get(edge.source)
+            if node_payload is not None:
+                return node_payload
+
+        return None
+
+    @classmethod
+    def _build_multi_branch_edge_outputs(
+        cls,
+        node_id: str,
+        output_data: dict[str, Any],
+        edges: list[EdgeDefinition],
+    ) -> tuple[dict[tuple[str, str], dict[str, Any]], set[str], set[str]]:
+        branch_outputs = output_data.get("branch_outputs") or {}
+        edge_outputs: dict[tuple[str, str], dict[str, Any]] = {}
+        active_targets: set[str] = set()
+        inactive_targets: set[str] = set()
+
+        for edge in edges:
+            if edge.source != node_id:
+                continue
+
+            branch_key = cls._branch_edge_key(edge)
+            if not branch_key:
+                raise FlowifyException(
+                    ErrorCode.INVALID_REQUEST,
+                    detail="Branch edge has no branch key.",
+                    context={
+                        "edge_id": edge.id,
+                        "source": edge.source,
+                        "target": edge.target,
+                    },
+                )
+
+            payload = branch_outputs.get(branch_key)
+            if cls._has_branch_items(payload):
+                edge_outputs[(edge.source, edge.target)] = payload
+                active_targets.add(edge.target)
+            else:
+                inactive_targets.add(edge.target)
+
+        return edge_outputs, active_targets, inactive_targets
+
+    @staticmethod
+    def _branch_edge_key(edge: EdgeDefinition) -> str:
+        return str(edge.label or edge.source_handle or "").strip()
+
+    @staticmethod
+    def _has_branch_items(payload: Any) -> bool:
+        return isinstance(payload, dict) and bool(payload.get("items"))
+
+    @staticmethod
+    def _resolve_multi_branch_skipped_nodes(
+        active_targets: set[str],
+        inactive_targets: set[str],
+        adjacency: dict[str, list[str]],
+    ) -> set[str]:
+        active_reachable: set[str] = set(active_targets)
+        for target in active_targets:
+            active_reachable.update(WorkflowExecutor._get_descendants(target, adjacency))
+
+        skipped_nodes: set[str] = set()
+        for target in inactive_targets:
+            if target in active_reachable:
+                continue
+
+            skipped_nodes.add(target)
+            for descendant in WorkflowExecutor._get_descendants(target, adjacency):
+                if descendant not in active_reachable:
+                    skipped_nodes.add(descendant)
+
+        return skipped_nodes
 
     @staticmethod
     def _topological_sort(nodes: list[NodeDefinition], edges: list[EdgeDefinition]) -> list[str]:

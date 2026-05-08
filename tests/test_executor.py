@@ -254,6 +254,201 @@ class TestExecuteWorkflow:
         )
 
 
+class TestFileTypeBranchExecution:
+    """File type branch executor-level routing tests."""
+
+    @staticmethod
+    def _make_branch_node(node_id: str = "node_branch") -> NodeDefinition:
+        return NodeDefinition(
+            id=node_id,
+            type="if_else",
+            config={},
+            runtime_type="if_else",
+            runtime_config={"branch_type": "file_type"},
+        )
+
+    def test_branch_edge_key_falls_back_to_source_handle(self):
+        edge = EdgeDefinition(
+            source="node_branch",
+            target="node_pdf",
+            sourceHandle="pdf",
+        )
+
+        assert WorkflowExecutor._branch_edge_key(edge) == "pdf"
+
+    @pytest.mark.asyncio
+    async def test_file_type_branch_passes_edge_payload_to_each_target(self, mock_db):
+        executor = WorkflowExecutor(mock_db)
+        seen_inputs: dict[str, dict | None] = {}
+
+        items = [
+            {"filename": "lecture.pdf", "mime_type": "application/pdf"},
+            {"filename": "photo.png", "mime_type": "image/png"},
+            {"filename": "memo.txt", "mime_type": "text/plain"},
+        ]
+
+        async def side_effect(node, input_data, service_tokens):
+            node_id = node.get("id", "")
+            seen_inputs[node_id] = input_data
+            if node_id == "node_source":
+                return {"type": "FILE_LIST", "items": items}
+            if node_id == "node_branch":
+                return {
+                    "type": "FILE_LIST",
+                    "items": items,
+                    "branch": "multi",
+                    "branch_outputs": {
+                        "pdf": {"type": "FILE_LIST", "items": [items[0]]},
+                        "image": {"type": "FILE_LIST", "items": [items[1]]},
+                        "other": {"type": "FILE_LIST", "items": [items[2]]},
+                    },
+                }
+            return {"type": "TEXT", "content": node_id}
+
+        executor._factory = _mock_factory(side_effect=side_effect)
+
+        nodes = [
+            NodeDefinition(id="node_source", type="input", config={}),
+            self._make_branch_node(),
+            NodeDefinition(id="node_pdf", type="llm", config={}),
+            NodeDefinition(id="node_image", type="llm", config={}),
+            NodeDefinition(id="node_other", type="llm", config={}),
+        ]
+        edges = [
+            EdgeDefinition(source="node_source", target="node_branch"),
+            EdgeDefinition(source="node_branch", target="node_pdf", label="pdf"),
+            EdgeDefinition(source="node_branch", target="node_image", label="image"),
+            EdgeDefinition(source="node_branch", target="node_other", label="other"),
+        ]
+
+        result = await executor.execute(
+            execution_id="exec_file_branch",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=nodes,
+            edges=edges,
+            service_tokens={},
+        )
+
+        assert result.state == WorkflowState.SUCCESS
+        assert seen_inputs["node_pdf"]["items"] == [items[0]]
+        assert seen_inputs["node_image"]["items"] == [items[1]]
+        assert seen_inputs["node_other"]["items"] == [items[2]]
+
+    @pytest.mark.asyncio
+    async def test_file_type_branch_skips_empty_branch_target(self, mock_db):
+        executor = WorkflowExecutor(mock_db)
+        execution_calls: list[str] = []
+
+        items = [{"filename": "lecture.pdf", "mime_type": "application/pdf"}]
+
+        async def side_effect(node, input_data, service_tokens):
+            node_id = node.get("id", "")
+            execution_calls.append(node_id)
+            if node_id == "node_source":
+                return {"type": "FILE_LIST", "items": items}
+            if node_id == "node_branch":
+                return {
+                    "type": "FILE_LIST",
+                    "items": items,
+                    "branch": "multi",
+                    "branch_outputs": {
+                        "pdf": {"type": "FILE_LIST", "items": items},
+                        "image": {"type": "FILE_LIST", "items": []},
+                    },
+                }
+            return {"type": "TEXT", "content": node_id}
+
+        executor._factory = _mock_factory(side_effect=side_effect)
+
+        nodes = [
+            NodeDefinition(id="node_source", type="input", config={}),
+            self._make_branch_node(),
+            NodeDefinition(id="node_pdf", type="llm", config={}),
+            NodeDefinition(id="node_image", type="llm", config={}),
+        ]
+        edges = [
+            EdgeDefinition(source="node_source", target="node_branch"),
+            EdgeDefinition(source="node_branch", target="node_pdf", label="pdf"),
+            EdgeDefinition(source="node_branch", target="node_image", label="image"),
+        ]
+
+        result = await executor.execute(
+            execution_id="exec_file_branch_skip",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=nodes,
+            edges=edges,
+            service_tokens={},
+        )
+
+        skipped_log = next(log for log in result.nodeLogs if log.nodeId == "node_image")
+        assert result.state == WorkflowState.SUCCESS
+        assert "node_image" not in execution_calls
+        assert skipped_log.status == "skipped"
+
+    @pytest.mark.asyncio
+    async def test_file_type_branch_does_not_skip_common_merge_node(self, mock_db):
+        executor = WorkflowExecutor(mock_db)
+        seen_inputs: dict[str, dict | None] = {}
+
+        items = [{"filename": "photo.png", "mime_type": "image/png"}]
+
+        async def side_effect(node, input_data, service_tokens):
+            node_id = node.get("id", "")
+            seen_inputs[node_id] = input_data
+            if node_id == "node_source":
+                return {"type": "FILE_LIST", "items": items}
+            if node_id == "node_branch":
+                return {
+                    "type": "FILE_LIST",
+                    "items": items,
+                    "branch": "multi",
+                    "branch_outputs": {
+                        "pdf": {"type": "FILE_LIST", "items": []},
+                        "image": {"type": "FILE_LIST", "items": items},
+                    },
+                }
+            if node_id == "node_image":
+                return {"type": "TEXT", "content": "image path"}
+            if node_id == "node_merge":
+                return {"type": "TEXT", "content": "merged"}
+            return {"type": "TEXT", "content": node_id}
+
+        executor._factory = _mock_factory(side_effect=side_effect)
+
+        nodes = [
+            NodeDefinition(id="node_source", type="input", config={}),
+            self._make_branch_node(),
+            NodeDefinition(id="node_pdf", type="llm", config={}),
+            NodeDefinition(id="node_image", type="llm", config={}),
+            NodeDefinition(id="node_merge", type="output", config={}),
+        ]
+        edges = [
+            EdgeDefinition(source="node_source", target="node_branch"),
+            EdgeDefinition(source="node_branch", target="node_pdf", label="pdf"),
+            EdgeDefinition(source="node_branch", target="node_image", label="image"),
+            EdgeDefinition(source="node_pdf", target="node_merge"),
+            EdgeDefinition(source="node_image", target="node_merge"),
+        ]
+
+        result = await executor.execute(
+            execution_id="exec_file_branch_merge",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=nodes,
+            edges=edges,
+            service_tokens={},
+        )
+
+        skipped_log = next(log for log in result.nodeLogs if log.nodeId == "node_pdf")
+        merge_log = next(log for log in result.nodeLogs if log.nodeId == "node_merge")
+        assert result.state == WorkflowState.SUCCESS
+        assert skipped_log.status == "skipped"
+        assert merge_log.status == "success"
+        assert seen_inputs["node_merge"]["content"] == "image path"
+
+
 class TestLoopExecution:
     """Loop one-by-one executor-level 반복 실행 테스트."""
 
