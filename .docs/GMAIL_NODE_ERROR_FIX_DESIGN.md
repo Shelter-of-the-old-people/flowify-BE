@@ -1,9 +1,9 @@
 # Gmail 노드 오류 수정 설계
 
-> 작성일: 2026-05-08  
-> 브랜치: `feat#145-gmail-error-check-and-fix&update`  
-> 관련 문서: `docs/GMAIL_NODE_ERROR_REQUIREMENTS.md`  
-> 관련 이슈: Gmail 노드 오류 수정  
+> 작성일: 2026-05-08
+> 브랜치: `9-gmail-node-error-fix`
+> 관련 문서: `docs/GMAIL_NODE_ERROR_REQUIREMENTS.md`
+> 관련 이슈: Gmail 노드 오류 수정
 > 목적: Gmail 노드 오류의 원인 후보를 바탕으로 FE 수정 방향, API 확인 절차, 지원 범위별 구현 설계를 정리한다.
 
 ---
@@ -17,22 +17,23 @@
 
 따라서 이번 설계는 아래 원칙을 따른다.
 
-- Gmail 지원 여부를 FE가 임의로 낙관하지 않는다.
-- 백엔드가 실제 지원하지 않는 Gmail 기능은 새 노드 추가 UI에서 진입을 막는다.
-- Gmail을 유지해야 하는 경우에는 source/sink/OAuth/picker/status 계약을 함께 맞춘다.
-- `label_picker` 보정은 Gmail source를 유지하는 경우에만 필수 구현으로 본다.
-- preview와 실제 Gmail 실행 엔진 개선은 이번 이슈의 핵심 범위가 아니며, 후속 이슈로 분리한다.
+- Gmail source/sink/OAuth를 모두 유지하는 선택지 C를 구현 기준으로 둔다.
+- Gmail을 열어두는 대신 source/sink/OAuth/picker/status/error 계약을 함께 맞춘다.
+- `label_picker` 보정은 Gmail source 유지의 필수 구현으로 본다.
+- Gmail source 실행 payload와 preview schema는 FastAPI 계약 반영 이후 완료로 보고, FastAPI error mapping은 Spring `FastApiClient` 변환 작업으로 이번 PR에 포함한다.
+- 아직 서버 runtime이 완전히 닫히지 않은 영역은 FE에서 임의 mode를 추가하지 않고, 문서화된 mode와 canonical payload만 처리한다.
 
-현재 문서와 코드 기준의 권장 기본안은 **Gmail 전체 임시 비활성화**다. 다만 장기적으로는 Gmail 발송과 Gmail 메일 필터링 기능을 지원해야 하므로, 이번 설계는 Gmail 관련 display/data type mapping을 제거하지 않고 **신규 진입만 capability 기준으로 제어**하는 방향을 택한다.
+이번 변경의 확정안은 **선택지 C: Gmail source/sink 모두 유지**다. 기존 방어 설계는 Gmail 미지원 가능성을 기준으로 신규 진입을 닫는 방향이었지만, 지금 제품 요구는 Gmail 발송과 발송인/라벨 기반 메일 조회 기능을 반드시 제공하는 것이다.
 
 이 판단의 근거는 다음과 같다.
 
-- 백엔드 점검 문서에는 Gmail connector가 미구현으로 기록되어 있다.
-- 현재 FE에는 Gmail을 실제 지원 가능 여부와 무관하게 여는 정적 allowlist가 있다.
+- Spring Boot 수정은 FastAPI runtime 구현이 아니라 `label_emails` target-options, OAuth scope 검증, FastAPI error 변환을 정렬하는 단계다.
+- FastAPI 문서는 Gmail source 6개 mode의 canonical payload와 Gmail sink send 결과 계약을 정렬하는 방향으로 업데이트되었다.
 - Gmail 발송 기능은 `gmail.send` scope가 필요하다.
-- 특정 키워드/발송인 기반 필터링은 Gmail source query와 중간 filter 노드 중 어느 레이어에서 처리할지 계약이 더 필요하다.
+- 발송인 기반 필터링은 현재 Gmail source `sender_email` mode와 맞는다.
+- 키워드 기반 필터링은 현재 catalog에 명시적 search mode가 없으므로 FE가 임의 mode를 만들지 않고 중간 filter 노드 또는 후속 catalog 확장으로 처리한다.
 
-따라서 이번 PR의 설계 판단은 **현재는 선택지 A를 기본 확정안으로 두고**, 실제 API 확인에서 Gmail OAuth와 sink schema가 검증된 경우에만 선택지 B로 좁혀 전환한다. Gmail source까지 여는 선택지 C는 `label_picker`, source target-options, source canonical payload, 필요한 Gmail read scope가 모두 확인된 뒤에만 적용한다.
+따라서 이번 PR의 설계 판단은 선택지 C로 전환한다. FE는 Gmail source/sink/OAuth allowlist를 복구하고, 최초 노드 추가 위자드의 `label_picker` 처리, Gmail picker UX, Gmail required template 차단 해제, source/sink status/error 표시를 함께 보정한다.
 
 ---
 
@@ -56,19 +57,19 @@
 
 ## 3. 비목표
 
-이번 설계에서 바로 구현 대상으로 보지 않는 것:
+이번 FE 설계에서 바로 구현 대상으로 보지 않는 것:
 
 - Gmail OAuth connector 백엔드 구현
 - Google Cloud Console scope 설정 변경
 - FastAPI Gmail source 실행 로직 구현
 - FastAPI Gmail sink 발송/초안 생성 로직 구현
-- Gmail source metadata preview 구현
+- FastAPI Gmail source preview executor 구현
 - Gmail sink no-write preview 구현
 - Gmail 템플릿 전체 UX 개편
 - Gmail fetch 개수 설정화
 - Gmail attachment payload 변환 계약 확정
 
-위 항목은 현재 오류 원인 확인과 FE 방어 수정 이후 후속 이슈로 분리한다.
+위 항목은 FE 저장소 밖의 백엔드 작업 또는 후속 UX 고도화로 분리한다. 다만 FE는 해당 계약이 들어왔을 때 깨지지 않도록 canonical payload 표시와 error/status mapping을 확인한다.
 
 ---
 
@@ -103,9 +104,11 @@ export const OAUTH_CONNECT_SUPPORTED_SERVICES = [
 
 설계 방향:
 
-- 백엔드 Gmail connector가 확인되기 전까지 Gmail은 OAuth connect supported list에서 제외한다.
-- 제외되면 `getOAuthConnectionUiState()`는 Gmail을 `unsupported`로 판단할 수 있다.
-- 새 노드 추가 UI에서는 Gmail 자체가 allowlist에서 빠지므로 사용자가 새 Gmail 노드를 만들 수 없다.
+- 선택지 C에서는 Gmail을 OAuth connect supported list에 포함한다.
+- Gmail 미연결 상태에서는 “연결 시작”이 가능해야 한다.
+- scope 부족은 미지원이 아니라 권한 부족 상태로 보여야 한다.
+- Spring Boot가 기능별 scope 검증을 내려주면 FE는 `oauth_scope_insufficient`를 `권한 부족`으로 표시한다.
+- OAuth connect API 자체가 실패하는 경우에는 raw error 대신 표준 에러/토스트/상태 문구로 처리한다.
 
 ### 4.2 Gmail source rollout 문제
 
@@ -204,17 +207,16 @@ const SINK_SERVICE_ROLLOUT_ALLOWLIST = [
 
 | 선택지 | 이번 PR 기본 판단 | 이유 |
 | --- | --- | --- |
-| A. Gmail 전체 임시 비활성화 | 기본 적용 후보 | 현재 repo 문서 기준 Gmail connector 미구현 가능성이 가장 높다. |
-| B. Gmail sink만 유지 | API 확인 후 조건부 전환 | Gmail 발송은 미래 핵심 기능이지만 `gmail.send` scope와 OAuth connector 확인이 필요하다. |
-| C. Gmail source/sink 모두 유지 | 이번 PR에서는 보수적으로 제외 | 키워드/발송인 필터링까지 온전하게 열려면 read scope, target-options, source payload 계약이 모두 필요하다. |
+| A. Gmail 전체 임시 비활성화 | 폐기 | 필수 Gmail 기능 요구와 맞지 않는다. |
+| B. Gmail sink만 유지 | 폐기 | 메일 발송은 가능하지만 발송인/라벨 기반 source 요구를 충족하지 못한다. |
+| C. Gmail source/sink 모두 유지 | 확정 | Gmail 발송, 라벨 메일 조회, 발송인 기준 필터링을 모두 지원하기 위한 기준안이다. |
 
-즉, API 확인이 불가능하거나 확인 결과가 불명확하면 A로 간다.  
-Gmail 발송 기능이 실제로 확인되면 B로 간다.  
-Gmail 메일 조회/라벨/검색까지 확인되면 C로 확장할 수 있지만, C는 이번 이슈의 기본값으로 보지 않는다.
+즉, 이번 작업은 A/B로 축소하지 않고 C를 구현 기준으로 둔다.
+API 확인이 불명확한 영역은 Gmail 진입을 닫는 방식이 아니라 Spring/FastAPI의 status, preflight, error mapping으로 사용자에게 명확히 보여주는 방향으로 처리한다.
 
-### 5.1 선택지 A: Gmail 전체 임시 비활성화
+### 5.1 폐기된 대안 A: Gmail 전체 임시 비활성화
 
-현재 문서 기준 권장 기본안이다.
+초기 백엔드 점검 문서만 기준으로 검토했던 방어안이다. 현재 필수 Gmail 기능 요구와 맞지 않으므로 이번 구현 기준에서 제외한다.
 
 적용 조건:
 
@@ -256,9 +258,9 @@ FE 변경:
 - 선택지 A에서는 템플릿 상세의 인스턴스화 버튼 방어까지 포함한다.
 - 템플릿 목록 표시 고도화는 후속 이슈로 분리한다.
 
-### 5.2 선택지 B: Gmail sink만 유지
+### 5.2 폐기된 대안 B: Gmail sink만 유지
 
-Gmail sink는 실제 동작하지만 Gmail source가 미지원일 때 선택한다.
+Gmail sink만 먼저 여는 절충안이다. 현재 요구사항에는 발송인/라벨 기반 Gmail source 기능이 포함되므로 이번 구현 기준에서 제외한다.
 
 적용 조건:
 
@@ -327,13 +329,14 @@ FE 변경:
 
 설계 적용 전 브라우저 로그인 세션 또는 인증 토큰이 있는 API 클라이언트로 확인한다.
 
-현재 Codex 실행 환경에서는 로그인된 브라우저 세션의 access token을 알 수 없으므로 API를 완전히 확정할 수 없다. 따라서 설계상 확정 판단은 다음 우선순위를 따른다.
+현재 Codex 실행 환경에서는 로그인된 브라우저 세션의 access token을 알 수 없으므로 API를 완전히 확정할 수 없다. 다만 제품 요구와 백엔드 최신 상태를 반영해 설계상 확정 판단은 선택지 C로 둔다.
 
-1. 로그인 세션으로 실제 API를 확인할 수 있으면 그 결과를 최우선으로 한다.
-2. 실제 API 확인이 불가능하면 `docs/backend/BACKEND_INTEGRATION_CHECK_REPORT.md`의 Gmail connector 미구현 기록을 우선한다.
-3. Gmail sink 가능성을 언급한 문서는 “기능 목표 또는 런타임 가능성”으로 보고, OAuth connector가 확인되기 전까지는 FE 노출 근거로 사용하지 않는다.
+1. 로그인 세션으로 실제 API를 확인할 수 있으면 그 결과를 검증 결과에 기록한다.
+2. Spring Boot 최신 상태는 OAuth/scope/`label_emails` target-options 정렬 단계로 본다.
+3. FastAPI 최신 상태는 Gmail source runtime payload, source preview schema, Gmail sink result schema 정렬이 반영된 상태로 본다. 남은 서버 의존성은 Spring의 FastAPI error body parsing, Spring error code 변환, FE 사용자 문구 mapping이다.
+4. FE는 Gmail source/sink/OAuth 진입을 열고, 미완료 runtime 영역은 status/error mapping으로 사용자에게 명확히 보여준다.
 
-이 기준에 따르면 현재 문서 기반 판단은 선택지 A다.
+이 기준에 따르면 현재 설계 판단은 선택지 C다.
 
 ### 6.1 OAuth 확인
 
@@ -427,7 +430,7 @@ GET /api/editor-catalog/sources/gmail/target-options?mode=starred_email
 
 | 결과 | 설계 |
 | --- | --- |
-| endpoint 없음 | Gmail source 비활성화 |
+| endpoint 없음 | 선택지 C blocker. Gmail source는 숨기지 않고 provider 구현 또는 표준 error/status 표시를 우선한다. |
 | endpoint 있음, label option 정상 | `label_picker` 보정 적용 |
 | endpoint error shape 불안정 | picker error handling 후속 이슈 |
 
@@ -476,7 +479,7 @@ GET /api/editor-catalog/sinks/gmail/schema?inputType=FILE_LIST
 
 ### 7.0 Gmail capability 정책
 
-Gmail은 장기적으로 source와 sink를 모두 지원해야 하지만, 현재는 실제 지원 범위가 불명확하다. 따라서 FE는 “Gmail이라는 서비스명 하나”를 기준으로 열고 닫지 않고, 아래 capability 단위로 판단한다.
+선택지 C에서 Gmail은 source와 sink를 모두 지원 대상으로 둔다. 따라서 FE는 “Gmail이라는 서비스명 하나”를 기준으로 숨기지 않고, 아래 capability 단위로 인증/권한/target/status를 판단한다.
 
 | capability | 의미 | 필요한 확인 |
 | --- | --- | --- |
@@ -773,16 +776,15 @@ oauth_token: "인증 연결",
 
 설계:
 
-- Gmail을 비활성화하더라도 `EMAIL_LIST`, `SINGLE_EMAIL` preview UI는 유지한다.
-- 기존 실행 결과 또는 다른 서비스가 email data type을 사용할 수 있기 때문이다.
-- 이번 이슈에서 DataPreviewBlock을 수정하는 것은 필수 범위가 아니다.
-- 단, Gmail source/sink 모두 유지하는 선택지 C에서는 수동 검증 대상으로 포함한다.
+- 선택지 C에서는 Gmail source/sink를 유지하므로 `EMAIL_LIST`, `SINGLE_EMAIL`, `FILE_LIST`, `SEND_RESULT` preview/data UI를 수동 검증 대상으로 포함한다.
+- 기존 실행 결과 또는 다른 서비스가 email data type을 사용할 수 있으므로 email data type 표시 로직은 제거하지 않는다.
+- FastAPI payload가 `email`/`emails`/`files` canonical field와 `items` alias를 함께 제공하므로 FE data preview는 두 형태를 모두 안전하게 읽을 수 있어야 한다.
 
 ---
 
 ## 8. 템플릿 영향 설계
 
-Gmail을 새 노드 추가 UI에서 비활성화하더라도 템플릿에는 Gmail required service가 남아 있을 수 있다.
+선택지 C에서는 Gmail을 새 노드 추가 UI에서 유지하고, Gmail required template도 막지 않는다.
 
 관련 예:
 
@@ -800,36 +802,35 @@ Gmail을 새 노드 추가 UI에서 비활성화하더라도 템플릿에는 Gma
 - `src/pages/template-detail/ui/TemplateInfoPanel.tsx`
 - `src/pages/template-detail/ui/TemplateRequiredServices.tsx`
 
-따라서 Gmail 전체 비활성화 선택지 A를 적용한다면 템플릿 경로도 방어 대상으로 보는 것이 안전하다.
+기존 선택지 A에서는 템플릿 경로도 방어 대상으로 봤지만, 선택지 C에서는 Gmail required template을 차단하지 않는다. 템플릿은 OAuth/status/preflight 흐름으로 진입한다.
 
-### 8.1 1차 권장: 템플릿 인스턴스화 방어
+### 8.1 선택지 C 기준: 템플릿 인스턴스화 허용
 
 설계:
 
-- Gmail이 현재 disabled capability라면 Gmail required template의 “가져오기” 버튼을 비활성화한다.
-- 상세 화면의 필요한 서비스 영역에서 Gmail을 “현재 준비 중”으로 표시한다.
+- Gmail required template의 “가져오기” 버튼을 활성화한다.
+- 상세 화면의 필요한 서비스 영역에서 Gmail을 일반 required service로 표시한다.
 - 목록에서 템플릿 자체를 숨기지는 않는다.
-- 템플릿 설명과 미리보기는 유지하되, 인스턴스화만 막는다.
+- 템플릿 설명과 미리보기를 유지하고, 인스턴스화 이후 OAuth/status 흐름으로 진입한다.
 
 장점:
 
-- 사용자가 Gmail 템플릿을 통해 미지원 Gmail 노드를 생성하는 경로를 막는다.
+- 사용자가 Gmail 템플릿을 통해 필수 Gmail workflow를 만들 수 있다.
 - 템플릿 목록 데이터나 백엔드 API를 변경하지 않는다.
-- 향후 Gmail capability가 켜지면 버튼을 다시 활성화하기 쉽다.
+- 미연결/scope 부족/실행 전 검증은 node status와 preflight에서 일관되게 처리한다.
 
 구현 후보:
 
-- `src/entities/template/model/template-service-support.ts` 신규 추가
-- `isTemplateBlockedByUnsupportedServices(template.requiredServices)` helper 추가
-- `TemplateInfoPanel`에 `unsupportedServices` 또는 `instantiateDisabledReason` prop 추가
-- Gmail disabled 상태에서는 버튼 disabled 및 안내 문구 표시
+- `src/entities/template/model/template-service-support.ts` 제거 또는 Gmail unsupported set 비활성화
+- `TemplateInfoPanel`의 Gmail unsupported message/disabled 조건 제거
+- `TemplateRequiredServices`의 Gmail “현재 준비 중” 표시 제거
 
 ### 8.2 2차 후보: 템플릿 목록 표시 보정
 
 설계:
 
 - 목록에서는 Gmail required template을 숨기지 않는다.
-- 다만 row나 detail에 “일부 서비스 준비 중” 배지를 표시할 수 있다.
+- 다만 row나 detail에 OAuth/scope 필요 상태 배지를 표시할지는 별도 UX로 결정한다.
 - 목록 숨김은 사용자가 템플릿 존재 자체를 알 수 없게 하므로 1차 방어로는 과하다.
 
 이번 문서의 권장:
@@ -874,7 +875,7 @@ Gmail이 allowlist에서 제거되면 서비스 목록에 표시되지 않는다
 
 - 노드는 캔버스에 계속 표시된다.
 - node status가 있으면 `필수 설정` 또는 `실행 조건` 메시지를 표시한다.
-- OAuth unsupported 상태면 연결 버튼을 막거나 준비 중 문구를 표시한다.
+- OAuth 미연결 또는 scope 부족 상태면 연결/재승인 안내를 표시한다.
 
 주의:
 
@@ -901,7 +902,7 @@ Gmail이 allowlist에서 제거되면 서비스 목록에 표시되지 않는다
 
 ## 10. 검증 설계
 
-### 10.1 선택지 A 검증
+### 10.1 폐기된 대안 A 검증
 
 전제:
 
@@ -926,6 +927,11 @@ Gmail이 allowlist에서 제거되면 서비스 목록에 표시되지 않는다
 - console runtime error가 없다.
 - 백엔드 `지원하지 않는 서비스: gmail` 오류가 발생하지 않는다.
 - 템플릿 인스턴스화 경로로도 새 Gmail workflow가 생성되지 않는다.
+
+주의:
+
+- 이 검증은 현재 선택지 C 구현 기준에서는 수행하지 않는 폐기된 대안 검증이다.
+- 선택지 C 검증은 `10.3 선택지 C 검증`을 기준으로 한다.
 
 ### 10.2 선택지 B 검증
 
@@ -991,52 +997,53 @@ pnpm run build
 
 ## 11. 구현 순서
 
-### Step 1. 실제 Gmail API 지원 상태 확인
+### Step 1. 선택지 C 기준 문서 정렬
 
 확인:
 
-- OAuth connect
-- source catalog
-- target-options
-- sink catalog/schema
-- node status
+- 요구사항 문서가 선택지 C를 최종 선택지로 명시하는가
+- 설계 문서의 파일별 변경 계획이 Gmail source/sink/OAuth 유지 기준인가
+- Spring Boot 문서가 `label_emails` target-options와 OAuth scope 검증을 우선 단계로 설명하는가
+- FastAPI 문서가 source runtime payload/schema 완료와 error mapping 미완료/후속 여부를 분리해서 설명하는가
 
 산출:
 
-- 선택지 A/B/C 중 하나 확정
-- PR description에 확인 결과 기록
+- 선택지 C 확정 근거
+- FE 구현 범위와 백엔드 미완료 범위 분리
+- PR description에 들어갈 서버 의존성 목록
+- FastAPI error mapping 구현 및 테스트 포함 여부 확인
 
-### Step 2. Gmail 노출 정책 수정
+### Step 2. Gmail 노출 정책 복구
 
-선택지에 따라 수정:
+선택지 C 기준으로 수정:
 
 - source rollout
 - sink rollout
 - OAuth supported list
-- template instantiate 방어
+- template instantiate 방어 제거
 
-### Step 3. 선택지 A일 경우 템플릿 방어
+기대 결과:
+
+- Gmail source mode가 신규 노드 추가 UI에 보인다.
+- Gmail sink가 도착 노드 목록에 보인다.
+- Gmail OAuth 연결 버튼이 준비 중이 아니라 연결 가능 상태로 보인다.
+- Gmail required template이 가져오기 가능 상태로 돌아온다.
+
+### Step 3. `label_picker` 최초 생성 위자드 보정
 
 수정:
 
-- Gmail required template의 instantiate button disabled
-- unsupported service 안내 문구
-- `/templates/{id}/instantiate` 호출 차단
+- add-node `REMOTE_TARGET_SCHEMA_TYPES`에 `label_picker` 추가
+- Gmail label option icon 보정
+- picker root/search/empty 문구에서 Drive 전용 표현 제거
+- 선택값 저장 계약 유지: `target`, `target_label`, `target_meta`
 
 주의:
 
-- 템플릿 목록 숨김은 하지 않는다.
-- 기존 template preview graph는 유지한다.
+- 기존 노드 설정 패널은 이미 `label_picker`를 remote picker로 처리하므로 최초 생성 위자드와 같은 기준으로 맞춘다.
+- `label_picker`를 추가하더라도 Gmail 외 서비스의 picker UX가 깨지지 않아야 한다.
 
-### Step 4. 선택지 C일 경우 label picker 보정
-
-수정:
-
-- add-node `REMOTE_TARGET_SCHEMA_TYPES`
-- add-node `TARGET_OPTION_ICON_MAP`
-- picker root/search/empty 문구
-
-### Step 5. 선택지 B/C일 경우 sink 설정 확인
+### Step 4. Gmail sink 설정 확인
 
 확인:
 
@@ -1044,10 +1051,26 @@ pnpm run build
 - required field 저장
 - node status
 - missing field label
+- `to`, `subject`, `body`, `body_format`, `action` key
 
 필요 시:
 
 - `node-status.ts` field label 보강
+- schema field label mapping 보강
+
+### Step 5. Gmail source data preview/status 확인
+
+확인:
+
+- `SINGLE_EMAIL` 결과가 subject/from/date/body preview 중심으로 표시되는지
+- `EMAIL_LIST` 결과가 list 형태로 표시되는지
+- `FILE_LIST` 결과가 attachment metadata를 깨뜨리지 않는지
+- source preview/runtime error가 raw key로 노출되지 않는지
+
+필요 시:
+
+- `DataPreviewBlock` email payload normalizing 보강
+- source runtime/preview error message mapping 보강
 
 ### Step 6. 미래 발송/필터링 경로 확인
 
@@ -1065,11 +1088,11 @@ pnpm run build
 
 ### Step 7. 수동 검증
 
-선택지별 검증 시나리오를 수행한다.
+선택지 C 검증 시나리오를 수행한다.
 
 ### Step 8. 문서 갱신
 
-최종 선택한 지원 범위와 검증 결과를 아래 중 하나에 반영한다.
+선택지 C 구현 결과와 검증 결과를 아래 중 하나에 반영한다.
 
 - `docs/GMAIL_NODE_ERROR_REQUIREMENTS.md`
 - PR description
@@ -1079,24 +1102,23 @@ pnpm run build
 
 ## 12. 파일별 변경 계획
 
-### 12.1 필수 후보
+### 12.1 필수 변경
 
-| 파일 | 선택지 A | 선택지 B | 선택지 C |
-| --- | --- | --- | --- |
-| `src/features/add-node/model/source-rollout.ts` | Gmail 제거 | Gmail 제거 | Gmail 유지/제한 |
-| `src/features/add-node/model/sink-rollout.ts` | Gmail 제거 | Gmail 유지 | Gmail 유지 |
-| `src/entities/oauth-token/model/oauth-connect-support.ts` | Gmail 제거 | Gmail 유지 | Gmail 유지 |
+| 파일 | 선택지 C 변경 |
+| --- | --- |
+| `src/features/add-node/model/source-rollout.ts` | Gmail source mode 복구: `single_email`, `new_email`, `sender_email`, `starred_email`, `label_emails`, `attachment_email` |
+| `src/features/add-node/model/sink-rollout.ts` | Gmail sink 복구 |
+| `src/entities/oauth-token/model/oauth-connect-support.ts` | Gmail OAuth connect 지원 복구 |
+| `src/features/add-node/model/source-target-picker.ts` | `label_picker` remote type 추가 |
+| `src/features/add-node/ui/SourceTargetPicker.tsx` | Gmail label option icon/문구 보정 |
+| `src/entities/template/model/template-service-support.ts` | 선택지 A용 Gmail unsupported 차단 제거 또는 비활성화 |
+| `src/pages/template-detail/ui/TemplateInfoPanel.tsx` | Gmail required template 가져오기 차단 제거 |
+| `src/pages/template-detail/ui/TemplateRequiredServices.tsx` | Gmail “현재 준비 중” 표시 제거 또는 capability 상태와 분리 |
 
 ### 12.2 조건부 후보
 
 | 파일 | 조건 | 변경 |
 | --- | --- | --- |
-| `src/entities/template/model/template-service-support.ts` | 선택지 A | Gmail unsupported 판정 helper |
-| `src/pages/template-detail/TemplateDetailPage.tsx` | 선택지 A | unsupported service 판정 전달 |
-| `src/pages/template-detail/ui/TemplateInfoPanel.tsx` | 선택지 A | 가져오기 버튼 disabled 및 안내 |
-| `src/pages/template-detail/ui/TemplateRequiredServices.tsx` | 선택지 A | Gmail 준비 중 표시 |
-| `src/features/add-node/model/source-target-picker.ts` | 선택지 C | `label_picker` remote type 추가 |
-| `src/features/add-node/ui/SourceTargetPicker.tsx` | 선택지 C | `MdLabel`, root label 문구 보정 |
 | `src/entities/workflow/lib/node-status.ts` | B/C에서 새 raw key 확인 시 | field label 추가 |
 | `src/features/configure-node/ui/panels/SinkNodePanel.tsx` | B/C에서 schema 저장 문제 확인 시 | validation/save 보정 |
 | `src/widgets/node-data-panel/ui/DataPreviewBlock.tsx` | C에서 data 표시 문제 확인 시 | email preview 보정 |
@@ -1105,7 +1127,7 @@ pnpm run build
 
 | 파일/영역 | 사유 |
 | --- | --- |
-| template list row 숨김/필터링 | 목록에서 숨길지 배지만 표시할지는 별도 UX 결정 필요 |
+| template list row 숨김/필터링 | 선택지 C에서는 숨기지 않는다. OAuth/scope 상태 배지는 후속 UX 결정 |
 | FastAPI runtime | FE 저장소 범위를 벗어나며 별도 백엔드 이슈 |
 | OAuth backend connector | FE 저장소 범위를 벗어남 |
 | Google Cloud scope 설정 | 운영/백엔드 설정 영역 |
@@ -1118,14 +1140,13 @@ pnpm run build
 
 리스크:
 
-- Gmail required template이 여전히 보일 수 있다.
-- template detail에서 가져오기 버튼을 통해 Gmail node가 포함된 workflow가 생성될 수 있다.
+- 기존 선택지 A처럼 Gmail 신규 진입만 닫으면 template detail에서 Gmail node가 포함된 workflow가 생성되는 우회 경로가 생길 수 있다.
 
 대응:
 
-- 선택지 A에서는 템플릿 상세의 인스턴스화 버튼까지 방어한다.
-- 목록에서는 숨기지 않고 상세에서 준비 중 상태를 보여준다.
-- 선택지 B에서는 source/sink 구분이 필요하므로 template nodes 검사 여부를 별도 판단한다.
+- 이번 선택지 C에서는 Gmail template을 막지 않는다.
+- Gmail required template은 OAuth/status/preflight 검증 흐름으로 통일한다.
+- 따라서 선택지 A용 unsupported template helper는 제거하거나 비활성화한다.
 
 ### 13.2 Gmail sink는 가능하지만 source만 막아야 할 수 있음
 
@@ -1158,10 +1179,22 @@ pnpm run build
 
 대응:
 
-- `label_picker` 보정은 선택지 C의 조건부 작업으로 둔다.
-- 지원 범위가 확정되기 전에는 picker 보정만 단독 해결책으로 보지 않는다.
+- `label_picker` 보정은 선택지 C의 필수 작업으로 둔다.
+- picker 보정만으로 OAuth/scope/FastAPI error 문제가 해결되는 것은 아니므로, Spring status/preflight와 FastAPI error mapping을 함께 검증한다.
 
-### 13.5 기존 Gmail 노드 데이터 손상 위험
+### 13.5 FastAPI error mapping 미완료 위험
+
+리스크:
+
+- 선택지 C에서는 Gmail source/sink/OAuth를 숨기지 않으므로 preview/runtime 실패가 사용자에게 직접 보일 수 있다.
+- Spring `FastApiClient`가 FastAPI error body의 `error_code`를 파싱하지 않으면 `OAUTH_SCOPE_INSUFFICIENT`, 외부 API 실패, runtime unsupported가 모두 `FASTAPI_UNAVAILABLE`처럼 보일 수 있다.
+
+대응:
+
+- 이번 PR 범위를 “선택지 C 서버 계약 완성”으로 잡고 FastAPI error mapping 구현과 테스트를 포함한다.
+- PR description에는 FastAPI error mapping이 포함되었고 어떤 error code를 Spring `ErrorCode`로 변환하는지 명시한다.
+
+### 13.6 기존 Gmail 노드 데이터 손상 위험
 
 리스크:
 
@@ -1173,7 +1206,7 @@ pnpm run build
 - 기존 node hydrate/display/data preview mapping은 유지한다.
 - 기존 workflow의 Gmail node는 읽기/표시 가능하게 둔다.
 
-### 13.6 미래 키워드 필터링을 잘못된 source mode로 열 위험
+### 13.7 미래 키워드 필터링을 잘못된 source mode로 열 위험
 
 리스크:
 
@@ -1185,7 +1218,7 @@ pnpm run build
 - 키워드 필터링은 우선 중간 filter/condition 노드에서 처리한다.
 - source-level Gmail search가 필요하면 백엔드 catalog에 실제 mode가 추가된 후 FE allowlist를 연다.
 
-### 13.7 미래 발송 기능을 과도하게 막을 위험
+### 13.8 미래 발송 기능을 과도하게 막을 위험
 
 리스크:
 
@@ -1201,33 +1234,34 @@ pnpm run build
 
 ## 14. 권장 최종안
 
-현재 요구사항, 추가 코드 확인 결과, 기존 백엔드 점검 문서 기준으로는 다음 순서를 권장한다.
+현재 요구사항, 백엔드 최신 상태, 필수 Gmail 기능 요구를 기준으로 최종안은 **선택지 C: Gmail source/sink 모두 유지**다.
 
-1. API 확인을 먼저 수행한다.
-2. Gmail connector 미지원이 확인되면 선택지 A를 적용한다.
-3. 실제 API 확인이 불가능하면 문서 기준으로 선택지 A를 적용한다.
-4. 선택지 A에서는 Gmail source/sink/OAuth 신규 진입을 모두 닫는다.
-5. 선택지 A에서는 Gmail required template의 인스턴스화도 막는다.
-6. 기존 Gmail node 표시와 email data preview는 유지한다.
-7. Gmail runtime 지원은 후속 이슈로 분리한다.
+구현 판단:
 
-단, API 확인 결과 Gmail sink가 이미 안정적으로 동작한다면 선택지 B로 전환한다. Gmail source와 target-options까지 안정적으로 확인되는 경우에만 선택지 C를 적용하고, 그때 `label_picker` 보정을 함께 구현한다.
+1. Gmail source/sink/OAuth 신규 진입을 다시 연다.
+2. `label_emails`의 `label_picker`를 최초 노드 추가 위자드에서 지원한다.
+3. Gmail required template 인스턴스화 차단을 제거한다.
+4. OAuth 미연결과 scope 부족은 미지원이 아니라 인증/권한 상태로 표시한다.
+5. Gmail source runtime payload와 source preview schema는 FastAPI canonical contract 반영이 완료되었으며, Spring/FE는 error mapping과 사용자 상태 표시를 이어서 맞춘다.
+6. FE는 Spring/FastAPI가 확정한 mode key만 사용하고 임의 Gmail search mode를 만들지 않는다.
 
 미래 기능 관점의 최종 판단:
 
-- “Gmail 노드에서 다른 사용자에게 메일을 발송하는 기능”은 선택지 B가 최소 필요 조건이다.
-- “특정 키워드 또는 발송인을 기준으로 메일을 필터링하는 기능”은 선택지 C 또는 중간 filter 노드 조합이 필요하다.
+- “Gmail 노드에서 다른 사용자에게 메일을 발송하는 기능”은 Gmail sink `send` schema, `gmail.send` scope, FastAPI send runtime을 기준으로 구현한다.
+- “특정 발송인을 기준으로 메일을 필터링하는 기능”은 Gmail source `sender_email` mode를 우선 사용한다.
+- “특정 키워드를 기준으로 메일을 필터링하는 기능”은 현재 catalog에 명시적 source mode가 없으므로, 1차에서는 중간 filter/condition/AI 노드 조합으로 처리한다.
 - 발송인 기준은 현재 catalog의 `sender_email` mode와 잘 맞는다.
-- 키워드 기준은 현재 catalog에 명시적 source mode가 없으므로, FE가 임의 mode를 만들지 않고 중간 filter 노드 또는 백엔드 catalog 확장 후 처리한다.
+- source-level keyword search가 필요하면 Spring catalog와 FastAPI runtime에 새 mode를 추가한 뒤 FE rollout에 반영한다.
 
 ---
 
 ## 15. 설계 완료 기준
 
-이 설계는 아래 조건을 만족하면 구현 단계로 넘어갈 수 있다.
+이 설계는 아래 조건을 만족하면 선택지 C 구현 단계로 넘어갈 수 있다.
 
-- Gmail 지원 범위 선택지 A/B/C 중 하나를 구현 전 확정할 수 있다.
-- 확정 기준이 API 확인 항목으로 정의되어 있다.
-- 선택지별 변경 파일과 검증 시나리오가 정리되어 있다.
-- `label_picker` 문제는 Gmail source 유지 시 필수 작업으로 분리되어 있다.
-- Gmail preview/runtime/template 목록 UX 확장은 후속 범위로 분리되어 있다.
+- Gmail 지원 범위가 선택지 C, 즉 source/sink/OAuth 유지로 확정되어 있다.
+- 선택지 C의 FE 변경 파일과 검증 시나리오가 정리되어 있다.
+- `label_picker` 문제가 Gmail source 유지의 필수 작업으로 정의되어 있다.
+- Spring Boot 완료 범위와 FastAPI 완료 범위가 분리되어 있다.
+- Gmail source runtime/preview 완료 기준이 canonical payload/schema와 Spring `FastApiClient` error mapping으로 분리되어 있다.
+- Gmail keyword filtering의 1차 처리 방식과 후속 source mode 확장 조건이 분리되어 있다.

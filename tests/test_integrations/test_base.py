@@ -38,6 +38,57 @@ class TestBaseIntegrationService:
             assert exc_info.value.error_code == ErrorCode.OAUTH_TOKEN_INVALID
 
     @pytest.mark.asyncio
+    async def test_403_scope_error_raises_oauth_scope_insufficient(self):
+        resp = _mock_response(
+            403,
+            {
+                "error": {
+                    "code": 403,
+                    "message": "Request had insufficient authentication scopes.",
+                    "status": "PERMISSION_DENIED",
+                    "details": [
+                        {
+                            "reason": "ACCESS_TOKEN_SCOPE_INSUFFICIENT",
+                            "metadata": {"service": "gmail.googleapis.com"},
+                        }
+                    ],
+                }
+            },
+        )
+
+        with (
+            patch("httpx.AsyncClient.request", new_callable=AsyncMock, return_value=resp),
+            pytest.raises(FlowifyException) as exc_info,
+        ):
+            await BaseIntegrationService._request("GET", "https://gmail.test.com", "token")
+
+        assert exc_info.value.error_code == ErrorCode.OAUTH_SCOPE_INSUFFICIENT
+        assert exc_info.value.context["status"] == 403
+        assert exc_info.value.context["provider_error"]["error"]["status"] == "PERMISSION_DENIED"
+
+    @pytest.mark.asyncio
+    async def test_429_raises_external_rate_limited(self):
+        resp = _mock_response(
+            429,
+            {
+                "error": {
+                    "code": 429,
+                    "message": "Quota exceeded.",
+                    "status": "RESOURCE_EXHAUSTED",
+                }
+            },
+        )
+
+        with (
+            patch("httpx.AsyncClient.request", new_callable=AsyncMock, return_value=resp),
+            pytest.raises(FlowifyException) as exc_info,
+        ):
+            await BaseIntegrationService._request("GET", "https://gmail.test.com", "token")
+
+        assert exc_info.value.error_code == ErrorCode.EXTERNAL_RATE_LIMITED
+        assert exc_info.value.context["status"] == 429
+
+    @pytest.mark.asyncio
     async def test_5xx_retries_then_raises(self):
         resp = _mock_response(503)
 
