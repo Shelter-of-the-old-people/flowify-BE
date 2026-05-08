@@ -210,8 +210,11 @@ class DataFilterNodeStrategy(NodeStrategy):
 
     def _extract_field(self, data: dict[str, Any], field: str) -> Any:
         """필드 ID와 alias를 기준으로 값을 추출합니다."""
+        if data.get("type") == "SINGLE_EMAIL" and isinstance(data.get("email"), dict):
+            data = data["email"]
+
         if field == "body_preview":
-            return str(data.get("body", ""))[:200]
+            return data.get("bodyPreview") or str(data.get("body", ""))[:200]
 
         source_key = FIELD_ALIASES.get(field, field)
         return data.get(source_key, "")

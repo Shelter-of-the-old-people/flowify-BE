@@ -45,14 +45,24 @@ async def test_gmail_send_text(service_tokens: dict) -> None:
 
     with patch("app.core.nodes.output_node.GmailService") as mock_gmail_class:
         mock_gmail = mock_gmail_class.return_value
-        mock_gmail.send_message = AsyncMock(return_value={"id": "msg_123"})
+        mock_gmail.send_message = AsyncMock(
+            return_value={"id": "msg_123", "threadId": "thread_123"}
+        )
 
         result = await strategy.execute(node, input_data, service_tokens)
 
     assert result == {
         "status": "sent",
         "service": "gmail",
-        "detail": {"id": "msg_123"},
+        "detail": {
+            "type": "SEND_RESULT",
+            "service": "gmail",
+            "status": "sent",
+            "messageId": "msg_123",
+            "threadId": "thread_123",
+            "to": ["receiver@example.com"],
+            "subject": "Flowify",
+        },
     }
     mock_gmail.send_message.assert_awaited_once_with(
         service_tokens["gmail"], "receiver@example.com", "Flowify", "Mail body"
@@ -71,7 +81,12 @@ async def test_gmail_draft_uses_create_draft(service_tokens: dict) -> None:
 
     with patch("app.core.nodes.output_node.GmailService") as mock_gmail_class:
         mock_gmail = mock_gmail_class.return_value
-        mock_gmail.create_draft = AsyncMock(return_value={"id": "draft_123"})
+        mock_gmail.create_draft = AsyncMock(
+            return_value={
+                "id": "draft_123",
+                "message": {"id": "msg_123", "threadId": "thread_123"},
+            }
+        )
         mock_gmail.send_message = AsyncMock()
 
         result = await strategy.execute(node, input_data, service_tokens)
@@ -79,7 +94,16 @@ async def test_gmail_draft_uses_create_draft(service_tokens: dict) -> None:
     assert result == {
         "status": "sent",
         "service": "gmail",
-        "detail": {"id": "draft_123"},
+        "detail": {
+            "type": "SEND_RESULT",
+            "service": "gmail",
+            "status": "drafted",
+            "messageId": "msg_123",
+            "threadId": "thread_123",
+            "to": ["receiver@example.com"],
+            "subject": "Draft subject",
+            "draftId": "draft_123",
+        },
     }
     mock_gmail.create_draft.assert_awaited_once_with(
         service_tokens["gmail"], "receiver@example.com", "Draft subject", "Draft body"

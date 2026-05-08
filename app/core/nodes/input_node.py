@@ -153,7 +153,9 @@ class InputNodeStrategy(NodeStrategy):
         )
 
     @staticmethod
-    def _to_drive_single_file(file_data: dict[str, Any], fallback_file_id: str = "") -> dict[str, Any]:
+    def _to_drive_single_file(
+        file_data: dict[str, Any], fallback_file_id: str = ""
+    ) -> dict[str, Any]:
         file_id = file_data.get("id") or fallback_file_id
         return {
             "type": "SINGLE_FILE",
@@ -203,40 +205,19 @@ class InputNodeStrategy(NodeStrategy):
         if mode == "new_email":
             msgs = await svc.list_messages(token, query="", max_results=1)
             if not msgs:
-                return {
-                    "type": "SINGLE_EMAIL",
-                    "subject": "",
-                    "from": "",
-                    "date": "",
-                    "body": "",
-                    "attachments": [],
-                }
+                return self._empty_single_email()
             return self._to_single_email(msgs[0])
 
         if mode == "sender_email":
             msgs = await svc.list_messages(token, query=f"from:{target}", max_results=1)
             if not msgs:
-                return {
-                    "type": "SINGLE_EMAIL",
-                    "subject": "",
-                    "from": "",
-                    "date": "",
-                    "body": "",
-                    "attachments": [],
-                }
+                return self._empty_single_email()
             return self._to_single_email(msgs[0])
 
         if mode == "starred_email":
             msgs = await svc.list_messages(token, query="is:starred", max_results=1)
             if not msgs:
-                return {
-                    "type": "SINGLE_EMAIL",
-                    "subject": "",
-                    "from": "",
-                    "date": "",
-                    "body": "",
-                    "attachments": [],
-                }
+                return self._empty_single_email()
             return self._to_single_email(msgs[0])
 
         if mode == "label_emails":
@@ -245,27 +226,31 @@ class InputNodeStrategy(NodeStrategy):
                 query=f"label:{target}",
                 max_results=max_results,
             )
+            emails = [self._to_email_item(msg) for msg in msgs]
             return {
                 "type": "EMAIL_LIST",
-                "items": [
-                    {
-                        "subject": msg.get("subject", ""),
-                        "from": msg.get("from", ""),
-                        "date": msg.get("date", ""),
-                        "body": msg.get("body", ""),
-                    }
-                    for msg in msgs
-                ],
+                "emails": emails,
+                "items": emails,
+                "metadata": {
+                    "count": len(emails),
+                    "truncated": len(emails) >= max_results,
+                    "sourceMode": mode,
+                },
             }
 
         if mode == "attachment_email":
             msgs = await svc.list_messages(token, query="has:attachment", max_results=1)
-            items = []
+            files = []
             for msg in msgs:
-                items.extend(self._to_file_items(msg.get("attachments", [])))
+                files.extend(self._to_file_items(msg.get("attachments", [])))
             return {
                 "type": "FILE_LIST",
-                "items": items,
+                "files": files,
+                "items": files,
+                "metadata": {
+                    "count": len(files),
+                    "truncated": False,
+                },
             }
 
         raise FlowifyException(
@@ -289,22 +274,74 @@ class InputNodeStrategy(NodeStrategy):
 
     @staticmethod
     def _to_single_email(msg: dict) -> dict[str, Any]:
+        email = InputNodeStrategy._to_email_detail(msg, include_body=True)
         return {
             "type": "SINGLE_EMAIL",
+            "email": email,
+            "id": email["id"],
+            "threadId": email["threadId"],
+            "subject": email["subject"],
+            "from": email["from"],
+            "sender": email["sender"],
+            "to": email["to"],
+            "date": email["date"],
+            "body": email["body"],
+            "bodyPreview": email["bodyPreview"],
+            "labels": email["labels"],
+            "attachments": email["attachments"],
+        }
+
+    @staticmethod
+    def _empty_single_email() -> dict[str, Any]:
+        return InputNodeStrategy._to_single_email({})
+
+    @staticmethod
+    def _to_email_item(msg: dict[str, Any]) -> dict[str, Any]:
+        return InputNodeStrategy._to_email_detail(msg, include_body=False)
+
+    @staticmethod
+    def _to_email_detail(msg: dict[str, Any], include_body: bool) -> dict[str, Any]:
+        from_value = msg.get("from", "")
+        body = msg.get("body", "") if include_body else ""
+        return {
+            "id": msg.get("id", ""),
+            "threadId": msg.get("threadId", ""),
             "subject": msg.get("subject", ""),
-            "from": msg.get("from", ""),
+            "from": from_value,
+            "sender": msg.get("sender", from_value),
+            "to": InputNodeStrategy._normalize_email_recipients(msg.get("to", [])),
             "date": msg.get("date", ""),
-            "body": msg.get("body", ""),
+            "body": body,
+            "bodyPreview": msg.get("bodyPreview")
+            or msg.get("snippet")
+            or msg.get("body", "")[:200],
+            "labels": msg.get("labels", msg.get("labelIds", [])),
             "attachments": InputNodeStrategy._to_file_items(msg.get("attachments", [])),
         }
+
+    @staticmethod
+    def _normalize_email_recipients(raw_value: Any) -> list[str]:
+        if isinstance(raw_value, list):
+            return [str(value) for value in raw_value if value]
+        if raw_value:
+            return [str(raw_value)]
+        return []
 
     @staticmethod
     def _to_file_items(attachments: list[dict]) -> list[dict[str, Any]]:
         return [
             {
+                "id": attachment.get("id", ""),
+                "name": attachment.get("name", attachment.get("filename", "")),
                 "filename": attachment.get("filename", ""),
+                "mimeType": attachment.get("mimeType", attachment.get("mime_type", "")),
                 "mime_type": attachment.get("mime_type", attachment.get("mimeType", "")),
                 "size": attachment.get("size"),
+                "source": attachment.get("source", "gmail"),
+                "messageId": attachment.get("messageId", ""),
+                "attachmentId": attachment.get("attachmentId", ""),
+                "content": attachment.get("content"),
+                "downloadUrl": attachment.get("downloadUrl"),
                 "url": attachment.get("url", ""),
             }
             for attachment in attachments
@@ -356,9 +393,7 @@ class InputNodeStrategy(NodeStrategy):
 
     # Canvas LMS
 
-    async def _fetch_canvas_lms(
-        self, token: str, mode: str, target: str
-    ) -> dict[str, Any]:
+    async def _fetch_canvas_lms(self, token: str, mode: str, target: str) -> dict[str, Any]:
         svc = CanvasLmsService()
 
         if mode == "course_files":
