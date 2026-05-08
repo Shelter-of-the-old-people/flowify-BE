@@ -181,10 +181,15 @@ async def test_gmail_new_email(service_tokens: dict) -> None:
         mock_gmail.list_messages = AsyncMock(
             return_value=[
                 {
+                    "id": "msg_1",
+                    "threadId": "thread_1",
                     "subject": "테스트 메일",
                     "from": "sender@example.com",
+                    "to": ["me@example.com"],
                     "date": "2026-04-24",
                     "body": "본문",
+                    "bodyPreview": "본문",
+                    "labels": ["INBOX"],
                 }
             ]
         )
@@ -193,10 +198,29 @@ async def test_gmail_new_email(service_tokens: dict) -> None:
 
     assert result == {
         "type": "SINGLE_EMAIL",
+        "email": {
+            "id": "msg_1",
+            "threadId": "thread_1",
+            "subject": "테스트 메일",
+            "from": "sender@example.com",
+            "sender": "sender@example.com",
+            "to": ["me@example.com"],
+            "date": "2026-04-24",
+            "body": "본문",
+            "bodyPreview": "본문",
+            "labels": ["INBOX"],
+            "attachments": [],
+        },
+        "id": "msg_1",
+        "threadId": "thread_1",
         "subject": "테스트 메일",
         "from": "sender@example.com",
+        "sender": "sender@example.com",
+        "to": ["me@example.com"],
         "date": "2026-04-24",
         "body": "본문",
+        "bodyPreview": "본문",
+        "labels": ["INBOX"],
         "attachments": [],
     }
     mock_gmail.list_messages.assert_awaited_once_with(
@@ -214,16 +238,24 @@ async def test_gmail_label_emails(service_tokens: dict) -> None:
         mock_gmail.list_messages = AsyncMock(
             return_value=[
                 {
+                    "id": "msg_1",
+                    "threadId": "thread_1",
                     "subject": "메일 1",
                     "from": "a@example.com",
                     "date": "2026-04-24",
                     "body": "첫 번째",
+                    "bodyPreview": "첫 번째",
+                    "labels": ["INBOX"],
                 },
                 {
+                    "id": "msg_2",
+                    "threadId": "thread_2",
                     "subject": "메일 2",
                     "from": "b@example.com",
                     "date": "2026-04-25",
                     "body": "두 번째",
+                    "bodyPreview": "두 번째",
+                    "labels": ["IMPORTANT"],
                 },
             ]
         )
@@ -231,20 +263,41 @@ async def test_gmail_label_emails(service_tokens: dict) -> None:
         result = await strategy.execute(node, None, service_tokens)
 
     assert result["type"] == "EMAIL_LIST"
-    assert result["items"] == [
+    expected_emails = [
         {
+            "id": "msg_1",
+            "threadId": "thread_1",
             "subject": "메일 1",
             "from": "a@example.com",
+            "sender": "a@example.com",
+            "to": [],
             "date": "2026-04-24",
-            "body": "첫 번째",
+            "body": "",
+            "bodyPreview": "첫 번째",
+            "labels": ["INBOX"],
+            "attachments": [],
         },
         {
+            "id": "msg_2",
+            "threadId": "thread_2",
             "subject": "메일 2",
             "from": "b@example.com",
+            "sender": "b@example.com",
+            "to": [],
             "date": "2026-04-25",
-            "body": "두 번째",
+            "body": "",
+            "bodyPreview": "두 번째",
+            "labels": ["IMPORTANT"],
+            "attachments": [],
         },
     ]
+    assert result["emails"] == expected_emails
+    assert result["items"] == expected_emails
+    assert result["metadata"] == {
+        "count": 2,
+        "truncated": False,
+        "sourceMode": "label_emails",
+    }
     mock_gmail.list_messages.assert_awaited_once_with(
         service_tokens["gmail"], query="label:work", max_results=20
     )
@@ -262,7 +315,16 @@ async def test_gmail_label_emails_uses_configured_max_results(service_tokens: di
 
         result = await strategy.execute(node, None, service_tokens)
 
-    assert result == {"type": "EMAIL_LIST", "items": []}
+    assert result == {
+        "type": "EMAIL_LIST",
+        "emails": [],
+        "items": [],
+        "metadata": {
+            "count": 0,
+            "truncated": False,
+            "sourceMode": "label_emails",
+        },
+    }
     mock_gmail.list_messages.assert_awaited_once_with(
         service_tokens["gmail"], query="label:IMPORTANT", max_results=100
     )
@@ -382,9 +444,17 @@ async def test_gmail_attachment_email_returns_file_list_metadata(service_tokens:
                     "id": "msg_1",
                     "attachments": [
                         {
+                            "id": "gmail-msg_1:a1",
+                            "name": "agenda.pdf",
                             "filename": "agenda.pdf",
+                            "mimeType": "application/pdf",
                             "mime_type": "application/pdf",
                             "size": 512,
+                            "source": "gmail",
+                            "messageId": "msg_1",
+                            "attachmentId": "a1",
+                            "content": None,
+                            "downloadUrl": None,
                             "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages/msg_1/attachments/a1",
                         }
                     ],
@@ -394,16 +464,30 @@ async def test_gmail_attachment_email_returns_file_list_metadata(service_tokens:
 
         result = await strategy.execute(node, None, service_tokens)
 
+    expected_files = [
+        {
+            "id": "gmail-msg_1:a1",
+            "name": "agenda.pdf",
+            "filename": "agenda.pdf",
+            "mimeType": "application/pdf",
+            "mime_type": "application/pdf",
+            "size": 512,
+            "source": "gmail",
+            "messageId": "msg_1",
+            "attachmentId": "a1",
+            "content": None,
+            "downloadUrl": None,
+            "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages/msg_1/attachments/a1",
+        }
+    ]
     assert result == {
         "type": "FILE_LIST",
-        "items": [
-            {
-                "filename": "agenda.pdf",
-                "mime_type": "application/pdf",
-                "size": 512,
-                "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages/msg_1/attachments/a1",
-            }
-        ],
+        "files": expected_files,
+        "items": expected_files,
+        "metadata": {
+            "count": 1,
+            "truncated": False,
+        },
     }
     mock_gmail.list_messages.assert_awaited_once_with(
         service_tokens["gmail"], query="has:attachment", max_results=1

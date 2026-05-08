@@ -20,6 +20,8 @@ class TestGmailService:
         with patch.object(gmail, "_request", new_callable=AsyncMock) as mock_req:
             mock_req.return_value = {
                 "id": "msg_1",
+                "threadId": "thread_1",
+                "labelIds": ["INBOX"],
                 "snippet": "Hello...",
                 "payload": {
                     "headers": [
@@ -35,6 +37,11 @@ class TestGmailService:
             result = await gmail.get_message("token", "msg_1")
             assert result["subject"] == "Test Subject"
             assert result["from"] == "sender@test.com"
+            assert result["sender"] == "sender@test.com"
+            assert result["to"] == ["me@test.com"]
+            assert result["threadId"] == "thread_1"
+            assert result["labels"] == ["INBOX"]
+            assert result["bodyPreview"] == "Hello..."
             assert result["body"] == body_text
 
     @pytest.mark.asyncio

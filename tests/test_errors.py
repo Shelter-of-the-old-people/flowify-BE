@@ -7,6 +7,8 @@ def test_error_code_properties():
     assert ErrorCode.UNAUTHORIZED.http_status == 401
     assert ErrorCode.LLM_API_ERROR.http_status == 502
     assert ErrorCode.LLM_GENERATION_FAILED.http_status == 422
+    assert ErrorCode.OAUTH_SCOPE_INSUFFICIENT.http_status == 403
+    assert ErrorCode.EXTERNAL_RATE_LIMITED.http_status == 429
     assert ErrorCode.ROLLBACK_UNAVAILABLE.http_status == 400
 
 

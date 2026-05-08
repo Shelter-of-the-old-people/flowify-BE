@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from typing import Any
 
 import httpx
 
@@ -15,6 +16,8 @@ class BaseIntegrationService:
         Retry up to three times with exponential backoff (1s, 2s, 4s).
     Error mapping:
         OAuth 401 -> OAUTH_TOKEN_INVALID
+        OAuth 403 insufficient scope -> OAUTH_SCOPE_INSUFFICIENT
+        Rate limit 429 -> EXTERNAL_RATE_LIMITED
         Other failures -> EXTERNAL_API_ERROR
     """
 
@@ -60,6 +63,26 @@ class BaseIntegrationService:
                         detail="OAuth 토큰이 만료되었거나 유효하지 않습니다.",
                         context={"url": url, "status": 401},
                     )
+                if resp.status_code == 403 and BaseIntegrationService._is_scope_error(resp):
+                    raise FlowifyException(
+                        ErrorCode.OAUTH_SCOPE_INSUFFICIENT,
+                        detail="OAuth 권한 범위가 부족합니다.",
+                        context={
+                            "url": url,
+                            "status": 403,
+                            "provider_error": BaseIntegrationService._extract_error_payload(resp),
+                        },
+                    )
+                if resp.status_code == 429:
+                    raise FlowifyException(
+                        ErrorCode.EXTERNAL_RATE_LIMITED,
+                        detail="외부 서비스 요청 한도를 초과했습니다.",
+                        context={
+                            "url": url,
+                            "status": 429,
+                            "provider_error": BaseIntegrationService._extract_error_payload(resp),
+                        },
+                    )
 
                 resp.raise_for_status()
 
@@ -93,3 +116,40 @@ class BaseIntegrationService:
             detail=f"외부 서비스 호출 실패: {url}",
             context={"url": url, "error": str(last_exc)},
         )
+
+    @staticmethod
+    def _extract_error_payload(resp: httpx.Response) -> Any:
+        content_type = resp.headers.get("content-type", "")
+        if content_type.startswith("application/json"):
+            try:
+                return resp.json()
+            except ValueError:
+                return resp.text
+        return resp.text
+
+    @staticmethod
+    def _is_scope_error(resp: httpx.Response) -> bool:
+        payload = BaseIntegrationService._extract_error_payload(resp)
+        haystack = BaseIntegrationService._stringify_error_payload(payload).lower()
+        scope_markers = (
+            "insufficient authentication scopes",
+            "insufficient_scope",
+            "access_token_scope_insufficient",
+            "oauth_scope_insufficient",
+            "scope insufficient",
+            "insufficient permissions",
+        )
+        return any(marker in haystack for marker in scope_markers)
+
+    @staticmethod
+    def _stringify_error_payload(payload: Any) -> str:
+        if isinstance(payload, dict):
+            return " ".join(
+                BaseIntegrationService._stringify_error_payload(value)
+                for value in payload.values()
+            )
+        if isinstance(payload, list):
+            return " ".join(
+                BaseIntegrationService._stringify_error_payload(value) for value in payload
+            )
+        return str(payload)

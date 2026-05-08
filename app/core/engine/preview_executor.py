@@ -195,18 +195,31 @@ class WorkflowPreviewExecutor:
                 query=f"label:{target}",
                 max_results=limit,
             )
+            emails = [self._to_email_item(msg, include_content) for msg in msgs]
             return {
                 "type": "EMAIL_LIST",
-                "items": [self._to_email_item(msg, include_content) for msg in msgs],
-                "truncated": len(msgs) >= limit,
+                "emails": emails,
+                "items": emails,
+                "metadata": {
+                    "count": len(emails),
+                    "truncated": len(emails) >= limit,
+                    "sourceMode": mode,
+                },
+                "truncated": len(emails) >= limit,
             }
 
         if mode == "attachment_email":
             msgs = await svc.list_messages(token, query="has:attachment", max_results=1)
-            items: list[dict[str, Any]] = []
+            files: list[dict[str, Any]] = []
             for msg in msgs:
-                items.extend(self._to_file_items(msg.get("attachments", [])))
-            return {"type": "FILE_LIST", "items": items, "truncated": False}
+                files.extend(self._to_file_items(msg.get("attachments", [])))
+            return {
+                "type": "FILE_LIST",
+                "files": files,
+                "items": files,
+                "metadata": {"count": len(files), "truncated": False},
+                "truncated": False,
+            }
 
         raise FlowifyException(
             ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
@@ -344,43 +357,74 @@ class WorkflowPreviewExecutor:
 
     @staticmethod
     def _to_single_email(msg: dict[str, Any], include_content: bool) -> dict[str, Any]:
+        email = WorkflowPreviewExecutor._to_email_detail(msg, include_content)
         return {
             "type": "SINGLE_EMAIL",
-            "subject": msg.get("subject", ""),
-            "from": msg.get("from", ""),
-            "date": msg.get("date", ""),
-            "body": msg.get("body", "") if include_content else "",
-            "attachments": WorkflowPreviewExecutor._to_file_items(msg.get("attachments", [])),
+            "email": email,
+            "id": email["id"],
+            "threadId": email["threadId"],
+            "subject": email["subject"],
+            "from": email["from"],
+            "sender": email["sender"],
+            "to": email["to"],
+            "date": email["date"],
+            "body": email["body"],
+            "bodyPreview": email["bodyPreview"],
+            "labels": email["labels"],
+            "attachments": email["attachments"],
         }
 
     @staticmethod
     def _to_email_item(msg: dict[str, Any], include_content: bool) -> dict[str, Any]:
+        return WorkflowPreviewExecutor._to_email_detail(msg, include_content)
+
+    @staticmethod
+    def _to_email_detail(msg: dict[str, Any], include_content: bool) -> dict[str, Any]:
+        from_value = msg.get("from", "")
         return {
+            "id": msg.get("id", ""),
+            "threadId": msg.get("threadId", ""),
             "subject": msg.get("subject", ""),
-            "from": msg.get("from", ""),
+            "from": from_value,
+            "sender": msg.get("sender", from_value),
+            "to": WorkflowPreviewExecutor._normalize_email_recipients(msg.get("to", [])),
             "date": msg.get("date", ""),
             "body": msg.get("body", "") if include_content else "",
+            "bodyPreview": msg.get("bodyPreview")
+            or msg.get("snippet")
+            or msg.get("body", "")[:200],
+            "labels": msg.get("labels", msg.get("labelIds", [])),
+            "attachments": WorkflowPreviewExecutor._to_file_items(msg.get("attachments", [])),
         }
 
     @staticmethod
     def _empty_email() -> dict[str, Any]:
-        return {
-            "type": "SINGLE_EMAIL",
-            "subject": "",
-            "from": "",
-            "date": "",
-            "body": "",
-            "attachments": [],
-        }
+        return WorkflowPreviewExecutor._to_single_email({}, include_content=False)
 
     @staticmethod
     def _to_file_items(attachments: list[dict]) -> list[dict[str, Any]]:
         return [
             {
+                "id": attachment.get("id", ""),
+                "name": attachment.get("name", attachment.get("filename", "")),
                 "filename": attachment.get("filename", ""),
+                "mimeType": attachment.get("mimeType", attachment.get("mime_type", "")),
                 "mime_type": attachment.get("mime_type", attachment.get("mimeType", "")),
                 "size": attachment.get("size"),
+                "source": attachment.get("source", "gmail"),
+                "messageId": attachment.get("messageId", ""),
+                "attachmentId": attachment.get("attachmentId", ""),
+                "content": attachment.get("content"),
+                "downloadUrl": attachment.get("downloadUrl"),
                 "url": attachment.get("url", ""),
             }
             for attachment in attachments
         ]
+
+    @staticmethod
+    def _normalize_email_recipients(raw_value: Any) -> list[str]:
+        if isinstance(raw_value, list):
+            return [str(value) for value in raw_value if value]
+        if raw_value:
+            return [str(raw_value)]
+        return []

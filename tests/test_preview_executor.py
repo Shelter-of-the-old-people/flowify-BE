@@ -161,3 +161,101 @@ async def test_middle_node_preview_is_not_implemented_yet() -> None:
     assert response.available is False
     assert response.status == "unavailable"
     assert response.reason == "PREVIEW_NOT_IMPLEMENTED"
+
+
+async def test_gmail_label_emails_preview_returns_canonical_aliases() -> None:
+    executor = WorkflowPreviewExecutor()
+    node = _source_node("gmail", "label_emails", "Label_1")
+
+    with patch("app.core.engine.preview_executor.GmailService") as mock_gmail_class:
+        mock_gmail = mock_gmail_class.return_value
+        mock_gmail.list_messages = AsyncMock(
+            return_value=[
+                {
+                    "id": "msg_1",
+                    "threadId": "thread_1",
+                    "subject": "Preview",
+                    "from": "sender@example.com",
+                    "date": "2026-05-08T10:00:00Z",
+                    "body": "full body",
+                    "bodyPreview": "preview body",
+                    "labels": ["INBOX"],
+                }
+            ]
+        )
+
+        response = await executor.preview_node(
+            workflow_id="wf1",
+            node_id="node_source",
+            nodes=[node],
+            service_tokens={"gmail": "token"},
+            limit=1,
+            include_content=False,
+        )
+
+    expected_email = {
+        "id": "msg_1",
+        "threadId": "thread_1",
+        "subject": "Preview",
+        "from": "sender@example.com",
+        "sender": "sender@example.com",
+        "to": [],
+        "date": "2026-05-08T10:00:00Z",
+        "body": "",
+        "bodyPreview": "preview body",
+        "labels": ["INBOX"],
+        "attachments": [],
+    }
+    assert response.output_data == {
+        "type": "EMAIL_LIST",
+        "emails": [expected_email],
+        "items": [expected_email],
+        "metadata": {
+            "count": 1,
+            "truncated": True,
+            "sourceMode": "label_emails",
+        },
+        "truncated": True,
+    }
+    mock_gmail.list_messages.assert_awaited_once_with(
+        "token",
+        query="label:Label_1",
+        max_results=1,
+    )
+
+
+async def test_gmail_single_email_preview_wraps_email_and_preserves_top_level_aliases() -> None:
+    executor = WorkflowPreviewExecutor()
+    node = _source_node("gmail", "single_email", "msg_1")
+
+    with patch("app.core.engine.preview_executor.GmailService") as mock_gmail_class:
+        mock_gmail = mock_gmail_class.return_value
+        mock_gmail.get_message = AsyncMock(
+            return_value={
+                "id": "msg_1",
+                "threadId": "thread_1",
+                "subject": "Subject",
+                "from": "sender@example.com",
+                "to": ["me@example.com"],
+                "date": "2026-05-08T10:00:00Z",
+                "body": "full body",
+                "bodyPreview": "preview body",
+                "labels": ["INBOX"],
+            }
+        )
+
+        response = await executor.preview_node(
+            workflow_id="wf1",
+            node_id="node_source",
+            nodes=[node],
+            service_tokens={"gmail": "token"},
+            limit=5,
+            include_content=True,
+        )
+
+    assert response.output_data["type"] == "SINGLE_EMAIL"
+    assert response.output_data["email"]["body"] == "full body"
+    assert response.output_data["email"]["bodyPreview"] == "preview body"
+    assert response.output_data["subject"] == "Subject"
+    assert response.output_data["from"] == "sender@example.com"
+    mock_gmail.get_message.assert_awaited_once_with("token", "msg_1")

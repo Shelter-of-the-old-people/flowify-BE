@@ -1,5 +1,6 @@
 import base64
 from email.message import EmailMessage
+from email.utils import getaddresses, parsedate_to_datetime
 
 from app.services.integrations.base import BaseIntegrationService
 
@@ -9,9 +10,7 @@ GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"
 class GmailService(BaseIntegrationService):
     """Gmail API integration service."""
 
-    async def list_messages(
-        self, token: str, query: str = "", max_results: int = 20
-    ) -> list[dict]:
+    async def list_messages(self, token: str, query: str = "", max_results: int = 20) -> list[dict]:
         """Return message details for a Gmail search/list query."""
         params = {"maxResults": max_results}
         if query:
@@ -36,17 +35,25 @@ class GmailService(BaseIntegrationService):
         )
 
         payload = data.get("payload", {})
-        headers = {h["name"]: h["value"] for h in payload.get("headers", [])}
+        headers = {
+            str(h.get("name", "")).lower(): h.get("value", "") for h in payload.get("headers", [])
+        }
         body = self._extract_body(payload)
+        message_id = data.get("id", "")
+        from_header = headers.get("from", "")
 
         return {
-            "id": data.get("id"),
-            "subject": headers.get("Subject", ""),
-            "from": headers.get("From", ""),
-            "to": headers.get("To", ""),
-            "date": headers.get("Date", ""),
+            "id": message_id,
+            "threadId": data.get("threadId", ""),
+            "subject": headers.get("subject", ""),
+            "from": from_header,
+            "sender": from_header,
+            "to": self._parse_address_list(headers.get("to", "")),
+            "date": self._normalize_date(headers.get("date", "")),
             "body": body,
-            "attachments": self._extract_attachments(payload, data.get("id", "")),
+            "bodyPreview": data.get("snippet") or body[:200],
+            "labels": data.get("labelIds", []),
+            "attachments": self._extract_attachments(payload, message_id),
             "snippet": data.get("snippet", ""),
         }
 
@@ -155,18 +162,46 @@ class GmailService(BaseIntegrationService):
             attachment_id = body.get("attachmentId")
             filename = part.get("filename", "")
             if filename or attachment_id:
+                attachment_key = attachment_id or filename or "attachment"
+                url = (
+                    f"{GMAIL_API}/messages/{message_id}/attachments/{attachment_id}"
+                    if attachment_id
+                    else ""
+                )
                 attachments.append(
                     {
+                        "id": f"gmail-{message_id}:{attachment_key}",
+                        "name": filename,
                         "filename": filename,
+                        "mimeType": part.get("mimeType", ""),
                         "mime_type": part.get("mimeType", ""),
                         "size": body.get("size"),
-                        "url": (
-                            f"{GMAIL_API}/messages/{message_id}/attachments/{attachment_id}"
-                            if attachment_id
-                            else ""
-                        ),
+                        "source": "gmail",
+                        "messageId": message_id,
+                        "attachmentId": attachment_id or "",
+                        "content": None,
+                        "downloadUrl": None,
+                        "url": url,
                     }
                 )
             attachments.extend(GmailService._extract_attachments(part, message_id))
 
         return attachments
+
+    @staticmethod
+    def _parse_address_list(raw_value: str) -> list[str]:
+        """Return normalized email addresses from an RFC 5322 address header."""
+        if not raw_value:
+            return []
+        parsed = [email for _, email in getaddresses([raw_value]) if email]
+        return parsed or [raw_value]
+
+    @staticmethod
+    def _normalize_date(raw_value: str) -> str:
+        """Normalize an email Date header to ISO-8601 when possible."""
+        if not raw_value:
+            return ""
+        try:
+            return parsedate_to_datetime(raw_value).isoformat()
+        except Exception:
+            return raw_value

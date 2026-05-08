@@ -22,6 +22,8 @@ class ErrorCode(Enum):
     LLM_GENERATION_FAILED = (422, "워크플로우 자동 생성에 실패했습니다")
     EXTERNAL_API_ERROR = (502, "외부 서비스 연결에 실패했습니다")
     OAUTH_TOKEN_INVALID = (400, "서비스 인증 토큰이 유효하지 않습니다")
+    OAUTH_SCOPE_INSUFFICIENT = (403, "서비스 인증 권한이 부족합니다")
+    EXTERNAL_RATE_LIMITED = (429, "외부 서비스 요청 한도를 초과했습니다")
     CRAWL_FAILED = (502, "웹 수집에 실패했습니다")
     DATA_CONVERSION_FAILED = (422, "데이터 변환에 실패했습니다")
     ROLLBACK_UNAVAILABLE = (400, "롤백할 수 없는 상태입니다")

@@ -131,12 +131,16 @@ class OutputNodeStrategy(NodeStrategy):
         svc = GmailService()
         if action == "send":
             if attachments:
-                return await svc.send_message(token, to, subject, body, attachments)
-            return await svc.send_message(token, to, subject, body)
+                result = await svc.send_message(token, to, subject, body, attachments)
+            else:
+                result = await svc.send_message(token, to, subject, body)
+            return self._to_gmail_send_result(result, to, subject, status="sent")
 
         if attachments:
-            return await svc.create_draft(token, to, subject, body, attachments)
-        return await svc.create_draft(token, to, subject, body)
+            result = await svc.create_draft(token, to, subject, body, attachments)
+        else:
+            result = await svc.create_draft(token, to, subject, body)
+        return self._to_gmail_send_result(result, to, subject, status="drafted")
 
     async def _send_notion(self, token: str, config: dict, input_data: dict) -> dict:
         target_id = config["target_id"]
@@ -188,23 +192,25 @@ class OutputNodeStrategy(NodeStrategy):
             content = self._to_bytes(input_data.get("content", ""))
             file_format = config.get("file_format", "txt")
             mime_type = config.get("mime_type", "text/plain")
-            return await svc.upload_file(token, f"output.{file_format}", content, folder_id, mime_type)
+            return await svc.upload_file(
+                token, f"output.{file_format}", content, folder_id, mime_type
+            )
 
         if data_type == "FILE_LIST":
             results = []
             for index, item in enumerate(input_data.get("items", []), start=1):
                 raw_filename = item.get("filename") or f"file_{index}"
-                destination_folder_id, fallback_filename = (
-                    await self._resolve_google_drive_destination(
-                        svc,
-                        token,
-                        folder_id,
-                        raw_filename,
-                    )
+                (
+                    destination_folder_id,
+                    fallback_filename,
+                ) = await self._resolve_google_drive_destination(
+                    svc,
+                    token,
+                    folder_id,
+                    raw_filename,
                 )
                 filename, mime_type, content = await self._get_file_list_item_upload_data(
-                    fallback_filename,
-                    item, service_tokens
+                    fallback_filename, item, service_tokens
                 )
                 results.append(
                     await svc.upload_file(
@@ -297,7 +303,7 @@ class OutputNodeStrategy(NodeStrategy):
     def _gmail_body_and_attachments(config: dict, input_data: dict) -> tuple[str, list[dict]]:
         data_type = input_data.get("type", "TEXT")
         if data_type == "TEXT":
-            return input_data.get("content", ""), []
+            return config.get("body") or input_data.get("content", ""), []
 
         if data_type == "SINGLE_FILE":
             filename = input_data.get("filename", "attachment")
@@ -325,6 +331,30 @@ class OutputNodeStrategy(NodeStrategy):
             return body, attachments
 
         return str(input_data), []
+
+    @staticmethod
+    def _to_gmail_send_result(
+        result: dict,
+        to: str,
+        subject: str,
+        *,
+        status: str,
+    ) -> dict[str, Any]:
+        message = result.get("message", {}) if isinstance(result.get("message"), dict) else {}
+        message_id = result.get("messageId") or message.get("id") or result.get("id", "")
+        thread_id = result.get("threadId") or message.get("threadId", "")
+        normalized = {
+            "type": "SEND_RESULT",
+            "service": "gmail",
+            "status": status,
+            "messageId": message_id,
+            "threadId": thread_id,
+            "to": [to],
+            "subject": subject,
+        }
+        if status == "drafted":
+            normalized["draftId"] = result.get("draftId") or result.get("id", "")
+        return normalized
 
     @staticmethod
     def _file_list_summary(items: list[dict]) -> str:
@@ -432,8 +462,10 @@ class OutputNodeStrategy(NodeStrategy):
         if url:
             return filename, mime_type, await self._download_file_from_url(url, service_tokens)
 
-        return self._metadata_filename(filename), "application/json", self._to_bytes(
-            json.dumps(item)
+        return (
+            self._metadata_filename(filename),
+            "application/json",
+            self._to_bytes(json.dumps(item)),
         )
 
     async def _download_file_from_url(
@@ -495,7 +527,9 @@ class OutputNodeStrategy(NodeStrategy):
         filename: str,
     ) -> tuple[str | None, str]:
         normalized_filename = str(filename).replace("\\", "/")
-        path_segments = [segment.strip() for segment in normalized_filename.split("/") if segment.strip()]
+        path_segments = [
+            segment.strip() for segment in normalized_filename.split("/") if segment.strip()
+        ]
         if len(path_segments) <= 1:
             return root_folder_id, path_segments[0] if path_segments else filename
 

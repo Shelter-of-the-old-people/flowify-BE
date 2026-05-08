@@ -150,7 +150,10 @@ class LLMNodeStrategy(NodeStrategy):
                 str(input_data.get("content") or ""),
             )
         if data_type == "SINGLE_EMAIL":
-            return f"Subject: {input_data.get('subject', '')}\n\n{input_data.get('body', '')}"
+            email = (
+                input_data.get("email") if isinstance(input_data.get("email"), dict) else input_data
+            )
+            return f"Subject: {email.get('subject', '')}\n\n{email.get('body') or email.get('bodyPreview', '')}"
         if data_type == "SPREADSHEET_DATA":
             headers = input_data.get("headers", [])
             rows = input_data.get("rows", [])
@@ -172,7 +175,7 @@ class LLMNodeStrategy(NodeStrategy):
                             f"Date: {item.get('date', '')}",
                             f"Subject: {item.get('subject', '')}",
                             "Body:",
-                            item.get("body", ""),
+                            item.get("body") or item.get("bodyPreview", ""),
                         ]
                     )
                 )
