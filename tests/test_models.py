@@ -71,6 +71,34 @@ class TestEdgeDefinition:
         edge = EdgeDefinition(source="node_1", target="node_2")
         assert edge.id is None
 
+    def test_branch_handle_aliases_from_spring_boot(self):
+        """Spring Boot가 보내는 sourceHandle/targetHandle을 매핑합니다."""
+        edge = EdgeDefinition.model_validate(
+            {
+                "id": "edge_pdf",
+                "source": "node_branch",
+                "target": "node_pdf",
+                "label": "pdf",
+                "sourceHandle": "pdf",
+                "targetHandle": "input",
+            }
+        )
+
+        assert edge.source_handle == "pdf"
+        assert edge.target_handle == "input"
+
+    def test_branch_handle_snake_case_fields(self):
+        """내부 코드에서는 snake_case handle 필드로도 생성할 수 있습니다."""
+        edge = EdgeDefinition(
+            source="node_branch",
+            target="node_pdf",
+            source_handle="pdf",
+            target_handle="input",
+        )
+
+        assert edge.source_handle == "pdf"
+        assert edge.target_handle == "input"
+
 
 class TestWorkflowDefinition:
     def test_camel_case_from_spring_boot(self):

@@ -68,12 +68,17 @@ class EdgeDefinition(BaseModel):
 
     Spring Boot는 id 필드를 포함해 전송합니다.
     label은 IfElse 분기 방향 ("true" | "false") 에 사용됩니다.
+    sourceHandle/targetHandle은 다중 분기 edge 라우팅 계약을 보존합니다.
     """
+
+    model_config = {"populate_by_name": True}
 
     id: str | None = None
     source: str
     target: str
     label: str | None = None
+    source_handle: str | None = Field(default=None, alias="sourceHandle")
+    target_handle: str | None = Field(default=None, alias="targetHandle")
 
 
 class TriggerConfig(BaseModel):
