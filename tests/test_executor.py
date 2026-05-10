@@ -893,6 +893,21 @@ class TestToLoopItemPayload:
         assert result["type"] == "SINGLE_EMAIL"
         assert result["subject"] == "Hi"
 
+    def test_article_list_to_text(self):
+        item = {
+            "title": "Release note",
+            "source": "SE Board",
+            "url": "https://seboard.site/posts/123",
+            "content": "Full content",
+        }
+        result = WorkflowExecutor._to_loop_item_payload("ARTICLE_LIST", "TEXT", item, {})
+
+        assert result["type"] == "TEXT"
+        assert result["article"] == item
+        assert "Title: Release note" in result["content"]
+        assert "URL: https://seboard.site/posts/123" in result["content"]
+        assert "Full content" in result["content"]
+
     def test_spreadsheet_data_row(self):
         loop_input = {"headers": ["name", "age"], "rows": [["Alice", 30]]}
         result = WorkflowExecutor._to_loop_item_payload(

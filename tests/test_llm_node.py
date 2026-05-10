@@ -470,6 +470,44 @@ async def test_extract_text_from_file_list_includes_metadata():
 # ── validate ──
 
 
+async def test_extract_text_from_article_list_includes_article_fields():
+    with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
+        mock_instance = mock_svc_cls.return_value
+        mock_instance.summarize = AsyncMock(return_value="summary")
+
+        from app.core.nodes.llm_node import LLMNodeStrategy
+
+        node = LLMNodeStrategy(config={"action": "summarize"})
+        node._llm_service = mock_instance
+
+        await node.execute(
+            node=_node(runtime_config={"action": "summarize"}),
+            input_data={
+                "type": "ARTICLE_LIST",
+                "items": [
+                    {
+                        "title": "Release note",
+                        "source": "SE Board",
+                        "author": "Admin",
+                        "published_at": "2026-05-10T10:00:00",
+                        "url": "https://seboard.site/posts/123",
+                        "summary": "Short summary",
+                        "content": "Full content",
+                    }
+                ],
+            },
+            service_tokens={},
+        )
+
+    call_args = mock_instance.summarize.call_args[0][0]
+    assert "[Article 1]" in call_args
+    assert "Title: Release note" in call_args
+    assert "Source: SE Board" in call_args
+    assert "URL: https://seboard.site/posts/123" in call_args
+    assert "Summary:" in call_args
+    assert "Full content" in call_args
+
+
 def test_validate_process_requires_prompt():
     with patch("app.core.nodes.llm_node.LLMService"):
         from app.core.nodes.llm_node import LLMNodeStrategy

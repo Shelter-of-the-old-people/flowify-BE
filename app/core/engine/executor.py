@@ -606,6 +606,14 @@ class WorkflowExecutor:
             payload["type"] = "SINGLE_EMAIL"
             return payload
 
+        if source_type == "ARTICLE_LIST" and item_type == "TEXT":
+            article = dict(item) if isinstance(item, dict) else {}
+            return {
+                "type": "TEXT",
+                "content": WorkflowExecutor._format_article_loop_text(article),
+                "article": article,
+            }
+
         if source_type == "SPREADSHEET_DATA" and item_type == "SPREADSHEET_DATA":
             row = item if isinstance(item, list) else []
             return {
@@ -750,6 +758,23 @@ class WorkflowExecutor:
                 item[target_key] = value
 
         return item
+
+    @staticmethod
+    def _format_article_loop_text(article: dict[str, Any]) -> str:
+        parts = [f"Title: {article.get('title', '')}"]
+        if article.get("source"):
+            parts.append(f"Source: {article.get('source', '')}")
+        if article.get("author"):
+            parts.append(f"Author: {article.get('author', '')}")
+        if article.get("published_at"):
+            parts.append(f"Published At: {article.get('published_at', '')}")
+        if article.get("url"):
+            parts.append(f"URL: {article.get('url', '')}")
+        if article.get("summary"):
+            parts.extend(["Summary:", str(article.get("summary"))])
+        if article.get("content"):
+            parts.extend(["Content:", str(article.get("content"))])
+        return "\n".join(parts).strip()
 
     @staticmethod
     def _to_text_result_filename(source_filename: str, index: int) -> str:

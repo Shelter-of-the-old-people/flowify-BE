@@ -163,6 +163,40 @@ async def test_middle_node_preview_is_not_implemented_yet() -> None:
     assert response.reason == "PREVIEW_NOT_IMPLEMENTED"
 
 
+async def test_web_news_preview_returns_article_list_without_token() -> None:
+    executor = WorkflowPreviewExecutor()
+    node = _source_node("web_news", "seboard_posts", "2")
+
+    with patch("app.core.engine.preview_executor.WebNewsService") as mock_web_news_class:
+        mock_web_news = mock_web_news_class.return_value
+        mock_web_news.fetch_articles = AsyncMock(
+            return_value={
+                "type": "ARTICLE_LIST",
+                "items": [{"id": "123", "title": "Release note"}],
+                "metadata": {"provider": "seboard", "count": 1},
+            }
+        )
+
+        response = await executor.preview_node(
+            workflow_id="wf1",
+            node_id="node_source",
+            nodes=[node],
+            service_tokens={},
+            limit=5,
+            include_content=False,
+        )
+
+    assert response.available is True
+    assert response.output_data["type"] == "ARTICLE_LIST"
+    assert response.output_data["items"][0]["title"] == "Release note"
+    mock_web_news.fetch_articles.assert_awaited_once_with(
+        "seboard_posts",
+        "2",
+        limit=5,
+        include_content=False,
+    )
+
+
 async def test_gmail_label_emails_preview_returns_canonical_aliases() -> None:
     executor = WorkflowPreviewExecutor()
     node = _source_node("gmail", "label_emails", "Label_1")

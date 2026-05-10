@@ -12,6 +12,9 @@ from app.models.workflow import NodeDefinition
 from app.services.integrations.canvas_lms import CanvasLmsService
 from app.services.integrations.gmail import GmailService
 from app.services.integrations.google_drive import GoogleDriveService
+from app.services.integrations.web_news import WebNewsService
+
+TOKENLESS_SOURCES = frozenset({"web_news"})
 
 
 class WorkflowPreviewExecutor:
@@ -76,7 +79,7 @@ class WorkflowPreviewExecutor:
 
         service = runtime_source.service
         token = service_tokens.get(service, "")
-        if not token and service not in ("web_crawl",):
+        if not token and service not in TOKENLESS_SOURCES:
             raise FlowifyException(
                 ErrorCode.OAUTH_TOKEN_INVALID,
                 detail=f"'{service}' 서비스의 토큰이 없습니다.",
@@ -104,6 +107,13 @@ class WorkflowPreviewExecutor:
                 runtime_source.mode,
                 runtime_source.target,
                 limit,
+            )
+        if service == "web_news":
+            return await self._preview_web_news(
+                runtime_source.mode,
+                runtime_source.target,
+                limit,
+                include_content,
             )
 
         raise FlowifyException(
@@ -275,6 +285,21 @@ class WorkflowPreviewExecutor:
         raise FlowifyException(
             ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
             detail=f"service=canvas_lms, mode={mode} preview is not supported",
+        )
+
+    async def _preview_web_news(
+        self,
+        mode: str,
+        target: str,
+        limit: int,
+        include_content: bool,
+    ) -> dict[str, Any]:
+        svc = WebNewsService()
+        return await svc.fetch_articles(
+            mode,
+            target,
+            limit=limit,
+            include_content=include_content,
         )
 
     @staticmethod

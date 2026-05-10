@@ -396,6 +396,34 @@ async def test_missing_token_raises_oauth_error() -> None:
     assert exc_info.value.error_code == ErrorCode.OAUTH_TOKEN_INVALID
 
 
+async def test_web_news_seboard_posts_runs_without_token() -> None:
+    """web_news source returns ARTICLE_LIST without OAuth token."""
+    strategy = InputNodeStrategy({})
+    node = _source_node("web_news", "seboard_posts", "2")
+    node["config"] = {"maxResults": 3, "includeContent": True}
+
+    with patch("app.core.nodes.input_node.WebNewsService") as mock_web_news_class:
+        mock_web_news = mock_web_news_class.return_value
+        mock_web_news.fetch_articles = AsyncMock(
+            return_value={
+                "type": "ARTICLE_LIST",
+                "items": [{"id": "123", "title": "Release note"}],
+                "metadata": {"provider": "seboard", "count": 1},
+            }
+        )
+
+        result = await strategy.execute(node, None, {})
+
+    assert result["type"] == "ARTICLE_LIST"
+    assert result["items"][0]["title"] == "Release note"
+    mock_web_news.fetch_articles.assert_awaited_once_with(
+        "seboard_posts",
+        "2",
+        limit=3,
+        include_content=True,
+    )
+
+
 async def test_unsupported_source_raises() -> None:
     """지원하지 않는 source는 UNSUPPORTED_RUNTIME_SOURCE를 발생시킵니다."""
     strategy = InputNodeStrategy({})
