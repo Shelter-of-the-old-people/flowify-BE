@@ -225,6 +225,8 @@ FastAPI는 성공 후보 상태만 계산해 callback payload로 보낸다.
 
 - 사용자가 목록에 원하는 스프레드시트가 없으면 FE -> Spring 생성 API로 새 파일을 만든다.
 - 사용자가 선택한 스프레드시트에 원하는 탭이 없으면 FE -> Spring 생성 API로 새 시트를 만든다.
+- 같은 이름의 스프레드시트가 여러 개 있을 수 있으므로 FastAPI는 `spreadsheet_id`만 신뢰하고 제목은 표시용 메타데이터로만 본다.
+- 같은 이름의 시트 탭은 한 스프레드시트 안에서 중복 생성하지 않는 정책을 전제로 한다.
 - FastAPI는 이미 선택된 `spreadsheet_id`, `sheet_name`을 받아 실행만 한다.
 
 즉 FastAPI에는 `create_spreadsheet`, `create_sheet` 런타임 책임을 넣지 않는다.
