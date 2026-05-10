@@ -39,7 +39,7 @@ SUPPORTED_SOURCES: dict[str, set[str]] = {
     "google_sheets": {"sheet_all", "new_row", "row_updated"},
     "slack": {"channel_messages"},
     "canvas_lms": {"course_files", "course_new_file", "term_all_files"},
-    "web_news": {"seboard_posts"},
+    "web_news": {"seboard_posts", "website_feed"},
 }
 
 TOKENLESS_SOURCES = frozenset({"web_crawl", "web_news"})

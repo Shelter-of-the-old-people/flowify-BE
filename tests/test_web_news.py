@@ -128,6 +128,44 @@ async def test_web_news_fetch_articles_returns_article_list() -> None:
     }
 
 
+async def test_web_news_fetch_articles_returns_website_feed_article_list() -> None:
+    class FakeRssFeedService:
+        async def list_articles(
+            self,
+            source_url: str,
+            *,
+            limit: int,
+            include_content: bool,
+        ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+            assert source_url == "https://example.com"
+            assert limit == 1
+            assert include_content is True
+            return (
+                [{"id": "post-1", "title": "RSS release"}],
+                {"feed_url": "https://example.com/rss.xml", "source_count": 2},
+            )
+
+    service = WebNewsService(rss_feed_service=FakeRssFeedService())
+
+    result = await service.fetch_articles(
+        "website_feed",
+        "https://example.com",
+        limit=1,
+        include_content=True,
+    )
+
+    assert result["type"] == "ARTICLE_LIST"
+    assert result["items"][0]["title"] == "RSS release"
+    assert result["metadata"] == {
+        "provider": "rss",
+        "count": 1,
+        "truncated": True,
+        "include_content": True,
+        "feed_url": "https://example.com/rss.xml",
+        "source_count": 2,
+    }
+
+
 async def test_web_news_unsupported_mode_raises() -> None:
     service = WebNewsService()
 

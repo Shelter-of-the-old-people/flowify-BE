@@ -197,6 +197,40 @@ async def test_web_news_preview_returns_article_list_without_token() -> None:
     )
 
 
+async def test_web_news_website_feed_preview_returns_article_list_without_token() -> None:
+    executor = WorkflowPreviewExecutor()
+    node = _source_node("web_news", "website_feed", "https://example.com")
+
+    with patch("app.core.engine.preview_executor.WebNewsService") as mock_web_news_class:
+        mock_web_news = mock_web_news_class.return_value
+        mock_web_news.fetch_articles = AsyncMock(
+            return_value={
+                "type": "ARTICLE_LIST",
+                "items": [{"id": "post-1", "title": "RSS release"}],
+                "metadata": {"provider": "rss", "count": 1},
+            }
+        )
+
+        response = await executor.preview_node(
+            workflow_id="wf1",
+            node_id="node_source",
+            nodes=[node],
+            service_tokens={},
+            limit=5,
+            include_content=False,
+        )
+
+    assert response.available is True
+    assert response.output_data["type"] == "ARTICLE_LIST"
+    assert response.output_data["items"][0]["title"] == "RSS release"
+    mock_web_news.fetch_articles.assert_awaited_once_with(
+        "website_feed",
+        "https://example.com",
+        limit=5,
+        include_content=False,
+    )
+
+
 async def test_gmail_label_emails_preview_returns_canonical_aliases() -> None:
     executor = WorkflowPreviewExecutor()
     node = _source_node("gmail", "label_emails", "Label_1")
