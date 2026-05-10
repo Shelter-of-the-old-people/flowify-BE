@@ -2,6 +2,7 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from app.common.errors import ErrorCode, FlowifyException
@@ -31,6 +32,122 @@ async def test_slack_send_text(service_tokens: dict) -> None:
     mock_slack.send_message.assert_awaited_once_with(
         service_tokens["slack"], "#test", "Hello Slack"
     )
+
+
+async def test_discord_send_text_without_service_token() -> None:
+    strategy = OutputNodeStrategy({})
+    node = _sink_node(
+        "discord",
+        webhook_url="https://discord.com/api/webhooks/test/token",
+        username="Flowify",
+    )
+    input_data = {"type": "TEXT", "content": "Hello Discord"}
+
+    with patch("app.core.nodes.output_node.httpx.AsyncClient") as mock_client_class:
+        mock_client = mock_client_class.return_value.__aenter__.return_value
+        mock_client.post = AsyncMock(return_value=MagicMock(status_code=204))
+
+        result = await strategy.execute(node, input_data, {})
+
+    assert result == {
+        "status": "sent",
+        "service": "discord",
+        "detail": {"status_code": 204},
+    }
+    mock_client.post.assert_awaited_once_with(
+        "https://discord.com/api/webhooks/test/token",
+        json={"content": "Hello Discord", "username": "Flowify"},
+    )
+
+
+async def test_discord_applies_message_template() -> None:
+    strategy = OutputNodeStrategy({})
+    node = _sink_node(
+        "discord",
+        webhook_url="https://discord.com/api/webhooks/test/token",
+        message_template="새 요약 결과입니다.\n\n{{content}}",
+    )
+    input_data = {"type": "TEXT", "content": "요약 본문"}
+
+    with patch("app.core.nodes.output_node.httpx.AsyncClient") as mock_client_class:
+        mock_client = mock_client_class.return_value.__aenter__.return_value
+        mock_client.post = AsyncMock(return_value=MagicMock(status_code=204))
+
+        await strategy.execute(node, input_data, {})
+
+    mock_client.post.assert_awaited_once_with(
+        "https://discord.com/api/webhooks/test/token",
+        json={"content": "새 요약 결과입니다.\n\n요약 본문"},
+    )
+
+
+async def test_discord_rejects_empty_webhook_url() -> None:
+    strategy = OutputNodeStrategy({})
+
+    with pytest.raises(FlowifyException) as exc_info:
+        await strategy.execute(
+            _sink_node("discord", webhook_url=""),
+            {"type": "TEXT", "content": "Hello Discord"},
+            {},
+        )
+
+    assert exc_info.value.error_code == ErrorCode.INVALID_REQUEST
+
+
+async def test_discord_rejects_empty_message() -> None:
+    strategy = OutputNodeStrategy({})
+
+    with pytest.raises(FlowifyException) as exc_info:
+        await strategy.execute(
+            _sink_node("discord", webhook_url="https://discord.com/api/webhooks/test/token"),
+            {"type": "TEXT", "content": "  "},
+            {},
+        )
+
+    assert exc_info.value.error_code == ErrorCode.INVALID_REQUEST
+
+
+async def test_discord_rejects_file_list_input() -> None:
+    strategy = OutputNodeStrategy({})
+
+    with pytest.raises(FlowifyException) as exc_info:
+        await strategy.execute(
+            _sink_node("discord", webhook_url="https://discord.com/api/webhooks/test/token"),
+            {"type": "FILE_LIST", "items": []},
+            {},
+        )
+
+    assert exc_info.value.error_code == ErrorCode.INVALID_REQUEST
+
+
+async def test_discord_external_error_raises() -> None:
+    strategy = OutputNodeStrategy({})
+    node = _sink_node("discord", webhook_url="https://discord.com/api/webhooks/test/token")
+    input_data = {"type": "TEXT", "content": "Hello Discord"}
+
+    with patch("app.core.nodes.output_node.httpx.AsyncClient") as mock_client_class:
+        mock_client = mock_client_class.return_value.__aenter__.return_value
+        mock_client.post = AsyncMock(return_value=MagicMock(status_code=400))
+
+        with pytest.raises(FlowifyException) as exc_info:
+            await strategy.execute(node, input_data, {})
+
+    assert exc_info.value.error_code == ErrorCode.EXTERNAL_API_ERROR
+
+
+async def test_discord_network_error_raises_external_api_error() -> None:
+    strategy = OutputNodeStrategy({})
+    node = _sink_node("discord", webhook_url="https://discord.com/api/webhooks/test/token")
+    input_data = {"type": "TEXT", "content": "Hello Discord"}
+
+    with patch("app.core.nodes.output_node.httpx.AsyncClient") as mock_client_class:
+        mock_client = mock_client_class.return_value.__aenter__.return_value
+        mock_client.post = AsyncMock(side_effect=httpx.ConnectError("connection failed"))
+
+        with pytest.raises(FlowifyException) as exc_info:
+            await strategy.execute(node, input_data, {})
+
+    assert exc_info.value.error_code == ErrorCode.EXTERNAL_API_ERROR
 
 
 async def test_gmail_send_text(service_tokens: dict) -> None:

@@ -21,7 +21,19 @@ from app.services.integrations.slack import SlackService
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_SINKS = {"slack", "gmail", "notion", "google_drive", "google_sheets", "google_calendar"}
+DISCORD_MESSAGE_LIMIT = 2000
+DISCORD_TRUNCATION_SUFFIX = "\n\n... (Discord 메시지 길이 제한으로 일부 내용이 생략되었습니다)"
+
+SUPPORTED_SINKS = {
+    "slack",
+    "gmail",
+    "notion",
+    "google_drive",
+    "google_sheets",
+    "google_calendar",
+    "discord",
+}
+TOKENLESS_SINKS = {"discord"}
 
 ACCEPTED_INPUT_TYPES: dict[str, set[str]] = {
     "slack": {"TEXT"},
@@ -30,6 +42,7 @@ ACCEPTED_INPUT_TYPES: dict[str, set[str]] = {
     "google_drive": {"TEXT", "SINGLE_FILE", "FILE_LIST", "SPREADSHEET_DATA"},
     "google_sheets": {"TEXT", "SPREADSHEET_DATA", "API_RESPONSE"},
     "google_calendar": {"TEXT", "SCHEDULE_DATA"},
+    "discord": {"TEXT"},
 }
 
 REQUIRED_CONFIG: dict[str, list[str]] = {
@@ -39,6 +52,7 @@ REQUIRED_CONFIG: dict[str, list[str]] = {
     "google_drive": ["folder_id"],
     "google_sheets": ["spreadsheet_id", "write_mode"],
     "google_calendar": ["calendar_id", "event_title_template", "action"],
+    "discord": ["webhook_url"],
 }
 
 
@@ -75,7 +89,7 @@ class OutputNodeStrategy(NodeStrategy):
                 )
 
         token = service_tokens.get(service, "")
-        if not token:
+        if service not in TOKENLESS_SINKS and not token:
             raise FlowifyException(
                 ErrorCode.OAUTH_TOKEN_INVALID,
                 detail=f"'{service}' service token is missing.",
@@ -95,6 +109,8 @@ class OutputNodeStrategy(NodeStrategy):
             result = await self._send_google_sheets(token, sink_config, input_data or {})
         elif service == "google_calendar":
             result = await self._send_google_calendar(token, sink_config, input_data or {})
+        elif service == "discord":
+            result = await self._send_discord(sink_config, input_data or {})
         else:
             result = {}
 
@@ -116,6 +132,48 @@ class OutputNodeStrategy(NodeStrategy):
         message = input_data.get("content", "")
         svc = SlackService()
         return await svc.send_message(token, channel, message)
+
+    async def _send_discord(self, config: dict, input_data: dict) -> dict:
+        webhook_url = str(config.get("webhook_url") or "").strip()
+        if not webhook_url:
+            raise FlowifyException(
+                ErrorCode.INVALID_REQUEST,
+                detail="Discord webhook_url is required.",
+            )
+
+        content = self._resolve_discord_message(config, input_data)
+        if not content:
+            raise FlowifyException(
+                ErrorCode.INVALID_REQUEST,
+                detail="Discord message content is empty.",
+            )
+
+        payload: dict[str, str] = {"content": content}
+        username = str(config.get("username") or "").strip()
+        avatar_url = str(config.get("avatar_url") or "").strip()
+        if username:
+            payload["username"] = username
+        if avatar_url:
+            payload["avatar_url"] = avatar_url
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(webhook_url, json=payload)
+        except httpx.HTTPError as e:
+            raise FlowifyException(
+                ErrorCode.EXTERNAL_API_ERROR,
+                detail="Discord Webhook 전송에 실패했습니다.",
+                context={"error": str(e)},
+            ) from e
+
+        if response.status_code < 200 or response.status_code >= 300:
+            raise FlowifyException(
+                ErrorCode.EXTERNAL_API_ERROR,
+                detail="Discord Webhook 전송에 실패했습니다.",
+                context={"status_code": response.status_code},
+            )
+
+        return {"status_code": response.status_code}
 
     async def _send_gmail(self, token: str, config: dict, input_data: dict) -> dict:
         to = config["to"]
@@ -518,6 +576,31 @@ class OutputNodeStrategy(NodeStrategy):
         if "googleapis.com" in lower_url or "drive.google.com" in lower_url:
             return service_tokens.get("google_drive")
         return None
+
+    @staticmethod
+    def _resolve_discord_message(config: dict, input_data: dict) -> str:
+        content = str(input_data.get("content") or "").strip()
+        template = str(config.get("message_template") or "").strip()
+
+        if template:
+            if "{{content}}" in template:
+                message = template.replace("{{content}}", content)
+            elif content:
+                message = f"{template}\n\n{content}"
+            else:
+                message = template
+        else:
+            message = content
+
+        return OutputNodeStrategy._truncate_discord_message(message.strip())
+
+    @staticmethod
+    def _truncate_discord_message(message: str) -> str:
+        if len(message) <= DISCORD_MESSAGE_LIMIT:
+            return message
+
+        limit = DISCORD_MESSAGE_LIMIT - len(DISCORD_TRUNCATION_SUFFIX)
+        return message[:limit].rstrip() + DISCORD_TRUNCATION_SUFFIX
 
     async def _resolve_google_drive_destination(
         self,
