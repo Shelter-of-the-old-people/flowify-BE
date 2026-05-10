@@ -156,8 +156,15 @@ class OutputNodeStrategy(NodeStrategy):
         if avatar_url:
             payload["avatar_url"] = avatar_url
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(webhook_url, json=payload)
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(webhook_url, json=payload)
+        except httpx.HTTPError as e:
+            raise FlowifyException(
+                ErrorCode.EXTERNAL_API_ERROR,
+                detail="Discord Webhook 전송에 실패했습니다.",
+                context={"error": str(e)},
+            ) from e
 
         if response.status_code < 200 or response.status_code >= 300:
             raise FlowifyException(

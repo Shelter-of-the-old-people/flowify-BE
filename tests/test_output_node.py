@@ -2,6 +2,7 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from app.common.errors import ErrorCode, FlowifyException
@@ -127,6 +128,21 @@ async def test_discord_external_error_raises() -> None:
     with patch("app.core.nodes.output_node.httpx.AsyncClient") as mock_client_class:
         mock_client = mock_client_class.return_value.__aenter__.return_value
         mock_client.post = AsyncMock(return_value=MagicMock(status_code=400))
+
+        with pytest.raises(FlowifyException) as exc_info:
+            await strategy.execute(node, input_data, {})
+
+    assert exc_info.value.error_code == ErrorCode.EXTERNAL_API_ERROR
+
+
+async def test_discord_network_error_raises_external_api_error() -> None:
+    strategy = OutputNodeStrategy({})
+    node = _sink_node("discord", webhook_url="https://discord.com/api/webhooks/test/token")
+    input_data = {"type": "TEXT", "content": "Hello Discord"}
+
+    with patch("app.core.nodes.output_node.httpx.AsyncClient") as mock_client_class:
+        mock_client = mock_client_class.return_value.__aenter__.return_value
+        mock_client.post = AsyncMock(side_effect=httpx.ConnectError("connection failed"))
 
         with pytest.raises(FlowifyException) as exc_info:
             await strategy.execute(node, input_data, {})
