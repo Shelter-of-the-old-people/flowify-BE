@@ -14,7 +14,10 @@ class SpringExecutionCallbackService:
     """Spring Boot 실행 완료 콜백 전송 서비스."""
 
     async def notify_execution_complete(
-        self, execution_id: str, execution: WorkflowExecution
+        self,
+        execution_id: str,
+        execution: WorkflowExecution,
+        node_state_updates: list[dict[str, Any]] | None = None,
     ) -> None:
         """Spring Boot에 실행 종료 상태를 전송합니다."""
         if not settings.SPRING_BASE_URL:
@@ -26,7 +29,10 @@ class SpringExecutionCallbackService:
             return
 
         callback_url = self._build_callback_url(execution_id)
-        callback_payload = self._build_payload(execution)
+        callback_payload = self._build_payload(
+            execution,
+            node_state_updates=node_state_updates or [],
+        )
         headers = {"X-Internal-Token": settings.INTERNAL_API_SECRET}
 
         try:
@@ -62,7 +68,12 @@ class SpringExecutionCallbackService:
         base_url = settings.SPRING_BASE_URL.rstrip("/")
         return f"{base_url}/api/internal/executions/{execution_id}/complete"
 
-    def _build_payload(self, execution: WorkflowExecution) -> dict[str, Any]:
+    def _build_payload(
+        self,
+        execution: WorkflowExecution,
+        *,
+        node_state_updates: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Spring Boot 계약에 맞는 콜백 payload를 생성합니다."""
         payload: dict[str, Any] = {
             "status": self._map_status(execution.state),
@@ -79,6 +90,9 @@ class SpringExecutionCallbackService:
         error_message = self._extract_error_message(execution)
         if error_message:
             payload["error"] = error_message
+
+        if node_state_updates:
+            payload["nodeStateUpdates"] = node_state_updates
 
         return payload
 

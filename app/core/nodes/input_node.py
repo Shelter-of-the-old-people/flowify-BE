@@ -10,6 +10,13 @@ from typing import Any
 
 from app.common.errors import ErrorCode, FlowifyException
 from app.core.nodes.base import NodeStrategy
+from app.core.nodes.google_sheets_common import (
+    build_sheet_range,
+    coerce_int,
+    extract_headers_and_rows,
+    hash_record,
+    row_to_record,
+)
 from app.services.integrations.canvas_lms import CanvasLmsService
 from app.services.integrations.gmail import GmailService
 from app.services.integrations.google_drive import GoogleDriveService
@@ -65,6 +72,8 @@ class InputNodeStrategy(NodeStrategy):
         mode = runtime_source["mode"]
         target = runtime_source.get("target", "")
         canonical_type = runtime_source.get("canonical_input_type", "TEXT")
+        runtime_source_config = runtime_source.get("config") or {}
+        runtime_source_state = runtime_source.get("state") or {}
         config = node.get("config") or {}
 
         token = service_tokens.get(service, "")
@@ -85,7 +94,14 @@ class InputNodeStrategy(NodeStrategy):
                 self._resolve_max_results(config),
             )
         if service == "google_sheets":
-            return await self._fetch_google_sheets(token, mode, target, canonical_type)
+            return await self._fetch_google_sheets(
+                token,
+                mode,
+                target,
+                canonical_type,
+                runtime_source_config or config,
+                runtime_source_state,
+            )
         if service == "slack":
             return await self._fetch_slack(token, mode, target)
         if service == "canvas_lms":
@@ -360,26 +376,193 @@ class InputNodeStrategy(NodeStrategy):
     # Google Sheets
 
     async def _fetch_google_sheets(
-        self, token: str, mode: str, target: str, canonical_type: str
+        self,
+        token: str,
+        mode: str,
+        target: str,
+        canonical_type: str,
+        config: dict[str, Any],
+        state: dict[str, Any],
     ) -> dict[str, Any]:
         svc = GoogleSheetsService()
+        spreadsheet_id = str(config.get("spreadsheet_id") or target or "").strip()
+        if not spreadsheet_id:
+            raise FlowifyException(
+                ErrorCode.INVALID_REQUEST,
+                detail="Google Sheets source requires spreadsheet_id.",
+            )
 
-        if mode in ("sheet_all", "new_row", "row_updated"):
-            # target = spreadsheet_id, default sheet name is "Sheet1"
-            values = await svc.read_range(token, target, "Sheet1")
-            headers = values[0] if values else []
-            rows = values[1:] if len(values) > 1 else []
-            return {
-                "type": "SPREADSHEET_DATA",
-                "headers": headers,
-                "rows": rows,
-                "sheet_name": "Sheet1",
-            }
+        sheet_name = str(config.get("sheet_name") or "Sheet1").strip() or "Sheet1"
+        range_a1 = build_sheet_range(config)
+        header_row = coerce_int(config.get("header_row"), 1)
+        data_start_row = coerce_int(config.get("data_start_row"), max(header_row + 1, 2))
+
+        values = await svc.read_range(token, spreadsheet_id, range_a1)
+        headers, rows = extract_headers_and_rows(values, header_row, data_start_row)
+
+        if mode == "sheet_all":
+            return self._build_google_sheets_payload(
+                spreadsheet_id=spreadsheet_id,
+                sheet_name=sheet_name,
+                mode=mode,
+                headers=headers,
+                rows=rows,
+                metadata={"row_count": len(rows)},
+            )
+
+        if mode == "new_row":
+            return self._build_google_sheets_new_row_payload(
+                spreadsheet_id=spreadsheet_id,
+                sheet_name=sheet_name,
+                headers=headers,
+                rows=rows,
+                config=config,
+                state=state,
+            )
+
+        if mode == "row_updated":
+            return self._build_google_sheets_row_updated_payload(
+                spreadsheet_id=spreadsheet_id,
+                sheet_name=sheet_name,
+                headers=headers,
+                rows=rows,
+                config=config,
+                state=state,
+            )
 
         raise FlowifyException(
             ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
             detail=f"service=google_sheets, mode={mode} is not supported",
         )
+
+    def _build_google_sheets_payload(
+        self,
+        *,
+        spreadsheet_id: str,
+        sheet_name: str,
+        mode: str,
+        headers: list[str],
+        rows: list[list[Any]],
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "type": "SPREADSHEET_DATA",
+            "spreadsheet_id": spreadsheet_id,
+            "sheet_name": sheet_name,
+            "headers": headers,
+            "rows": rows,
+            "metadata": {"mode": mode, **(metadata or {})},
+        }
+
+    def _build_google_sheets_new_row_payload(
+        self,
+        *,
+        spreadsheet_id: str,
+        sheet_name: str,
+        headers: list[str],
+        rows: list[list[Any]],
+        config: dict[str, Any],
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        initial_sync_mode = str(config.get("initial_sync_mode") or "skip_existing").strip()
+        prior_last_seen = state.get("last_seen_row_index")
+        current_last_seen = len(rows)
+
+        if prior_last_seen in (None, ""):
+            emitted_rows = rows if initial_sync_mode == "emit_existing" else []
+        else:
+            try:
+                emitted_rows = rows[int(prior_last_seen) :]
+            except (TypeError, ValueError):
+                emitted_rows = rows
+
+        payload = self._build_google_sheets_payload(
+            spreadsheet_id=spreadsheet_id,
+            sheet_name=sheet_name,
+            mode="new_row",
+            headers=headers,
+            rows=emitted_rows,
+            metadata={
+                "row_count": len(emitted_rows),
+                "total_rows": len(rows),
+                "initial_sync_mode": initial_sync_mode,
+            },
+        )
+        payload["node_state_update"] = {
+            "service": "google_sheets",
+            "state": {"last_seen_row_index": current_last_seen},
+        }
+        return payload
+
+    def _build_google_sheets_row_updated_payload(
+        self,
+        *,
+        spreadsheet_id: str,
+        sheet_name: str,
+        headers: list[str],
+        rows: list[list[Any]],
+        config: dict[str, Any],
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        key_column = str(config.get("key_column") or "").strip()
+        if not key_column:
+            raise FlowifyException(
+                ErrorCode.INVALID_REQUEST,
+                detail="Google Sheets row_updated requires key_column.",
+            )
+        if key_column not in headers:
+            raise FlowifyException(
+                ErrorCode.INVALID_REQUEST,
+                detail=f"Google Sheets key_column '{key_column}' is not present in headers.",
+            )
+
+        initial_sync_mode = str(config.get("initial_sync_mode") or "skip_existing").strip()
+        previous_snapshot = state.get("row_snapshot") if isinstance(state, dict) else {}
+        previous_snapshot = previous_snapshot if isinstance(previous_snapshot, dict) else {}
+
+        current_snapshot: dict[str, str] = {}
+        changed_rows: list[list[Any]] = []
+        changed_keys: list[str] = []
+
+        for row in rows:
+            record = row_to_record(headers, row)
+            row_key = record.get(key_column, "")
+            if not row_key:
+                continue
+
+            row_hash = hash_record(record)
+            current_snapshot[row_key] = row_hash
+
+            if not previous_snapshot:
+                if initial_sync_mode == "emit_existing":
+                    changed_rows.append(row)
+                    changed_keys.append(row_key)
+                continue
+
+            if previous_snapshot.get(row_key) != row_hash:
+                changed_rows.append(row)
+                changed_keys.append(row_key)
+
+        payload = self._build_google_sheets_payload(
+            spreadsheet_id=spreadsheet_id,
+            sheet_name=sheet_name,
+            mode="row_updated",
+            headers=headers,
+            rows=changed_rows,
+            metadata={
+                "row_count": len(changed_rows),
+                "changed_keys": changed_keys,
+                "initial_sync_mode": initial_sync_mode,
+            },
+        )
+        payload["node_state_update"] = {
+            "service": "google_sheets",
+            "state": {
+                "last_seen_row_index": len(rows),
+                "row_snapshot": current_snapshot,
+            },
+        }
+        return payload
 
     # Slack
 

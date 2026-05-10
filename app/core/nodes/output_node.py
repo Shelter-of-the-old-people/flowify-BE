@@ -12,6 +12,12 @@ import httpx
 
 from app.common.errors import ErrorCode, FlowifyException
 from app.core.nodes.base import NodeStrategy
+from app.core.nodes.google_sheets_common import (
+    build_sheet_range,
+    normalize_cell,
+    records_to_rows,
+    row_to_record,
+)
 from app.services.integrations.gmail import GmailService
 from app.services.integrations.google_calendar import GoogleCalendarService
 from app.services.integrations.google_drive import GoogleDriveService
@@ -291,23 +297,44 @@ class OutputNodeStrategy(NodeStrategy):
 
     async def _send_google_sheets(self, token: str, config: dict, input_data: dict) -> dict:
         spreadsheet_id = config["spreadsheet_id"]
-        write_mode = config.get("write_mode", "append")
-        sheet_name = config.get("sheet_name", "Sheet1")
-        data_type = input_data.get("type", "TEXT")
         svc = GoogleSheetsService()
+        write_mode = str(config.get("write_mode") or "append_rows").strip()
+        range_a1 = build_sheet_range(config)
+        headers, rows = self._build_google_sheets_tabular_payload(config, input_data)
 
-        if data_type == "SPREADSHEET_DATA":
-            headers = input_data.get("headers")
-            rows = input_data.get("rows", [])
-            values = ([headers] + rows) if headers else rows
-        elif data_type == "TEXT":
-            values = [[input_data.get("content", "")]]
-        else:
-            values = [[str(input_data)]]
+        if write_mode in {"append", "append_rows"}:
+            values = rows
+            if config.get("include_headers") and headers:
+                values = [headers, *rows]
+            return await svc.append_rows(token, spreadsheet_id, range_a1, values)
 
-        if write_mode == "overwrite":
-            return await svc.write_range(token, spreadsheet_id, sheet_name, values)
-        return await svc.append_rows(token, spreadsheet_id, sheet_name, values)
+        if write_mode in {"overwrite", "overwrite_range"}:
+            values = [headers, *rows] if headers else rows
+            await svc.clear_range(token, spreadsheet_id, range_a1)
+            return await svc.write_range(token, spreadsheet_id, range_a1, values)
+
+        if write_mode in {"update_row_by_key", "upsert_row_by_key"}:
+            key_column = str(config.get("key_column") or "").strip()
+            if not key_column:
+                raise FlowifyException(
+                    ErrorCode.INVALID_REQUEST,
+                    detail="Google Sheets key_column is required for update/upsert mode.",
+                )
+            return await self._upsert_google_sheets_rows(
+                svc=svc,
+                token=token,
+                spreadsheet_id=spreadsheet_id,
+                range_a1=range_a1,
+                incoming_headers=headers,
+                incoming_rows=rows,
+                key_column=key_column,
+                allow_insert=write_mode == "upsert_row_by_key",
+            )
+
+        raise FlowifyException(
+            ErrorCode.INVALID_REQUEST,
+            detail=f"Unsupported Google Sheets write_mode: {write_mode}",
+        )
 
     async def _send_google_calendar(self, token: str, config: dict, input_data: dict) -> dict:
         calendar_id = config.get("calendar_id", "primary")
@@ -356,6 +383,131 @@ class OutputNodeStrategy(NodeStrategy):
             return await svc.create_event(token, calendar_id, event)
 
         return {}
+
+    async def _upsert_google_sheets_rows(
+        self,
+        *,
+        svc: GoogleSheetsService,
+        token: str,
+        spreadsheet_id: str,
+        range_a1: str,
+        incoming_headers: list[str],
+        incoming_rows: list[list[str]],
+        key_column: str,
+        allow_insert: bool,
+    ) -> dict[str, Any]:
+        existing_values = await svc.read_range(token, spreadsheet_id, range_a1)
+        existing_headers = existing_values[0] if existing_values else []
+        existing_rows = existing_values[1:] if len(existing_values) > 1 else []
+
+        if not existing_headers:
+            if not incoming_headers:
+                raise FlowifyException(
+                    ErrorCode.INVALID_REQUEST,
+                    detail="Google Sheets update/upsert requires target sheet headers.",
+                )
+            await svc.write_range(token, spreadsheet_id, range_a1, [incoming_headers, *incoming_rows])
+            return {
+                "mode": "initialized_with_rows",
+                "updated": 0,
+                "inserted": len(incoming_rows),
+            }
+
+        if key_column not in existing_headers:
+            raise FlowifyException(
+                ErrorCode.INVALID_REQUEST,
+                detail=f"Google Sheets key_column '{key_column}' is not present in target sheet.",
+            )
+
+        records = [row_to_record(incoming_headers, row) for row in incoming_rows]
+        updated = 0
+        inserted = 0
+
+        for record in records:
+            key_value = normalize_cell(record.get(key_column, ""))
+            if not key_value:
+                continue
+
+            target_row_index = self._find_google_sheets_row_index(existing_headers, existing_rows, key_column, key_value)
+            target_row_values = [normalize_cell(record.get(header, "")) for header in existing_headers]
+
+            if target_row_index is not None:
+                await svc.write_range(
+                    token,
+                    spreadsheet_id,
+                    self._single_row_range(range_a1, len(existing_headers), target_row_index),
+                    [target_row_values],
+                )
+                updated += 1
+                continue
+
+            if not allow_insert:
+                continue
+
+            await svc.append_rows(token, spreadsheet_id, range_a1, [target_row_values])
+            existing_rows.append(target_row_values)
+            inserted += 1
+
+        return {
+            "mode": "upsert" if allow_insert else "update",
+            "updated": updated,
+            "inserted": inserted,
+        }
+
+    @staticmethod
+    def _build_google_sheets_tabular_payload(
+        config: dict[str, Any],
+        input_data: dict[str, Any],
+    ) -> tuple[list[str], list[list[str]]]:
+        data_type = input_data.get("type", "TEXT")
+
+        if data_type == "SPREADSHEET_DATA":
+            headers = [str(header) for header in input_data.get("headers") or []]
+            rows = [[normalize_cell(cell) for cell in row] for row in input_data.get("rows", [])]
+            return headers, rows
+
+        if data_type == "API_RESPONSE":
+            source = input_data.get("data") if isinstance(input_data.get("data"), dict) else input_data
+            if isinstance(source, dict):
+                filtered = {
+                    str(key): normalize_cell(value)
+                    for key, value in source.items()
+                    if key != "type" and not isinstance(value, (dict, list))
+                }
+                headers = list(filtered.keys())
+                return headers, ([list(filtered.values())] if headers else [])
+
+        value_column = str(config.get("value_column") or "value").strip() or "value"
+        return [value_column], [[normalize_cell(input_data.get("content", str(input_data)))]]
+
+    @staticmethod
+    def _find_google_sheets_row_index(
+        headers: list[str],
+        rows: list[list[Any]],
+        key_column: str,
+        key_value: str,
+    ) -> int | None:
+        key_index = headers.index(key_column)
+        for offset, row in enumerate(rows, start=2):
+            padded = list(row) + [""] * max(0, len(headers) - len(row))
+            if normalize_cell(padded[key_index]) == key_value:
+                return offset
+        return None
+
+    @staticmethod
+    def _single_row_range(range_a1: str, column_count: int, row_index: int) -> str:
+        sheet_name = str(range_a1).split("!", 1)[0]
+        end_column = OutputNodeStrategy._column_letter(column_count)
+        return f"{sheet_name}!A{row_index}:{end_column}{row_index}"
+
+    @staticmethod
+    def _column_letter(column_index: int) -> str:
+        index = max(column_index, 1)
+        letters = []
+        while index:
+            index, remainder = divmod(index - 1, 26)
+            letters.append(chr(65 + remainder))
+        return "".join(reversed(letters))
 
     @staticmethod
     def _gmail_body_and_attachments(config: dict, input_data: dict) -> tuple[str, list[dict]]:

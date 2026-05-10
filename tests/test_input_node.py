@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.common.errors import ErrorCode, FlowifyException
+from app.core.nodes.google_sheets_common import hash_record
 from app.core.nodes.input_node import InputNodeStrategy
 
 # ── 테스트 헬퍼 ──────────────────────────────────────────────────
@@ -373,13 +374,78 @@ async def test_sheets_sheet_all(service_tokens: dict) -> None:
 
     assert result == {
         "type": "SPREADSHEET_DATA",
+        "spreadsheet_id": "sheet_123",
         "headers": ["name", "age"],
         "rows": [["Alice", 30], ["Bob", 25]],
         "sheet_name": "Sheet1",
+        "metadata": {"mode": "sheet_all", "row_count": 2},
     }
     mock_sheets.read_range.assert_awaited_once_with(
         service_tokens["google_sheets"], "sheet_123", "Sheet1"
     )
+
+
+async def test_sheets_new_row_first_run_skips_existing(service_tokens: dict) -> None:
+    strategy = InputNodeStrategy({})
+    node = {
+        "runtime_source": {
+            "service": "google_sheets",
+            "mode": "new_row",
+            "target": "sheet_123",
+            "canonical_input_type": "SPREADSHEET_DATA",
+            "config": {
+                "spreadsheet_id": "sheet_123",
+                "sheet_name": "Responses",
+                "initial_sync_mode": "skip_existing",
+            },
+        }
+    }
+
+    with patch("app.core.nodes.input_node.GoogleSheetsService") as mock_sheets_class:
+        mock_sheets = mock_sheets_class.return_value
+        mock_sheets.read_range = AsyncMock(
+            return_value=[["id", "status"], ["a", "open"], ["b", "done"]]
+        )
+
+        result = await strategy.execute(node, None, service_tokens)
+
+    assert result["rows"] == []
+    assert result["node_state_update"] == {
+        "service": "google_sheets",
+        "state": {"last_seen_row_index": 2},
+    }
+
+
+async def test_sheets_row_updated_returns_changed_rows(service_tokens: dict) -> None:
+    strategy = InputNodeStrategy({})
+    unchanged_hash = hash_record({"id": "b", "status": "done"})
+    node = {
+        "runtime_source": {
+            "service": "google_sheets",
+            "mode": "row_updated",
+            "target": "sheet_123",
+            "canonical_input_type": "SPREADSHEET_DATA",
+            "config": {
+                "spreadsheet_id": "sheet_123",
+                "sheet_name": "Responses",
+                "key_column": "id",
+            },
+            "state": {"row_snapshot": {"a": "old-hash", "b": unchanged_hash}},
+        }
+    }
+
+    with patch("app.core.nodes.input_node.GoogleSheetsService") as mock_sheets_class:
+        mock_sheets = mock_sheets_class.return_value
+        mock_sheets.read_range = AsyncMock(
+            return_value=[["id", "status"], ["a", "open"], ["b", "done"]]
+        )
+
+        result = await strategy.execute(node, None, service_tokens)
+
+    assert result["rows"] == [["a", "open"]]
+    assert result["node_state_update"]["service"] == "google_sheets"
+    assert result["node_state_update"]["state"]["last_seen_row_index"] == 2
+    assert "a" in result["node_state_update"]["state"]["row_snapshot"]
 
 
 # ── 에러 케이스 ──────────────────────────────────────────────────
