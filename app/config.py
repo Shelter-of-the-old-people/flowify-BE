@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
 
+    NAVER_CLIENT_ID: str = ""
+    NAVER_CLIENT_SECRET: str = ""
+
     SLACK_BOT_TOKEN: str = ""
     NOTION_INTEGRATION_TOKEN: str = ""
     GITHUB_TOKEN: str = ""

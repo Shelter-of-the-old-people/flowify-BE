@@ -453,6 +453,33 @@ async def test_web_news_website_feed_runs_without_token() -> None:
     )
 
 
+async def test_naver_news_article_search_runs_without_token() -> None:
+    """naver_news source returns ARTICLE_LIST without OAuth token."""
+    strategy = InputNodeStrategy({})
+    node = _source_node("naver_news", "article_search", "인공지능")
+    node["config"] = {"maxResults": 2}
+
+    with patch("app.core.nodes.input_node.NaverNewsService") as mock_naver_news_class:
+        mock_naver_news = mock_naver_news_class.return_value
+        mock_naver_news.search_articles = AsyncMock(
+            return_value={
+                "type": "ARTICLE_LIST",
+                "items": [{"id": "news-1", "title": "AI news"}],
+                "metadata": {"provider": "naver_news", "count": 1},
+            }
+        )
+
+        result = await strategy.execute(node, None, {})
+
+    assert result["type"] == "ARTICLE_LIST"
+    assert result["items"][0]["title"] == "AI news"
+    assert strategy.validate(node) is True
+    mock_naver_news.search_articles.assert_awaited_once_with(
+        "인공지능",
+        limit=2,
+    )
+
+
 async def test_unsupported_source_raises() -> None:
     """지원하지 않는 source는 UNSUPPORTED_RUNTIME_SOURCE를 발생시킵니다."""
     strategy = InputNodeStrategy({})

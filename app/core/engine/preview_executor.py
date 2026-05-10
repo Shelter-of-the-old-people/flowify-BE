@@ -12,9 +12,10 @@ from app.models.workflow import NodeDefinition
 from app.services.integrations.canvas_lms import CanvasLmsService
 from app.services.integrations.gmail import GmailService
 from app.services.integrations.google_drive import GoogleDriveService
+from app.services.integrations.naver_news import NaverNewsService
 from app.services.integrations.web_news import WebNewsService
 
-TOKENLESS_SOURCES = frozenset({"web_news"})
+TOKENLESS_SOURCES = frozenset({"web_news", "naver_news"})
 
 
 class WorkflowPreviewExecutor:
@@ -104,6 +105,12 @@ class WorkflowPreviewExecutor:
         if service == "canvas_lms":
             return await self._preview_canvas_lms(
                 token,
+                runtime_source.mode,
+                runtime_source.target,
+                limit,
+            )
+        if service == "naver_news":
+            return await self._preview_naver_news(
                 runtime_source.mode,
                 runtime_source.target,
                 limit,
@@ -301,6 +308,21 @@ class WorkflowPreviewExecutor:
             limit=limit,
             include_content=include_content,
         )
+
+    async def _preview_naver_news(
+        self,
+        mode: str,
+        target: str,
+        limit: int,
+    ) -> dict[str, Any]:
+        if mode != "article_search":
+            raise FlowifyException(
+                ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
+                detail=f"service=naver_news, mode={mode} preview is not supported",
+            )
+
+        svc = NaverNewsService()
+        return await svc.search_articles(target, limit=limit)
 
     @staticmethod
     def _find_node(nodes: list[NodeDefinition], node_id: str) -> NodeDefinition:
