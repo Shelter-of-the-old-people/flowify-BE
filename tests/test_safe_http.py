@@ -48,6 +48,55 @@ async def test_get_json_rejects_disallowed_host(monkeypatch: pytest.MonkeyPatch)
     assert exc_info.value.error_code == ErrorCode.INVALID_REQUEST
 
 
+async def test_get_text_allows_any_public_https_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(socket, "getaddrinfo", _public_dns)
+
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            text="<rss><channel><title>Feed</title></channel></rss>",
+            headers={"content-type": "application/rss+xml"},
+            request=request,
+        )
+    )
+    client = SafeHttpClient(allow_any_public_host=True, transport=transport)
+
+    result = await client.get_text("https://feed.example.com/rss.xml")
+
+    assert "<rss>" in result
+
+
+async def test_get_text_rejects_unsupported_content_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(socket, "getaddrinfo", _public_dns)
+
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            content=b"\x00\x01",
+            headers={"content-type": "application/octet-stream"},
+            request=request,
+        )
+    )
+    client = SafeHttpClient(allow_any_public_host=True, transport=transport)
+
+    with pytest.raises(FlowifyException) as exc_info:
+        await client.get_text("https://feed.example.com/rss.xml")
+
+    assert exc_info.value.error_code == ErrorCode.EXTERNAL_API_ERROR
+
+
+async def test_get_text_rejects_url_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(socket, "getaddrinfo", _public_dns)
+    client = SafeHttpClient(allow_any_public_host=True)
+
+    with pytest.raises(FlowifyException) as exc_info:
+        await client.get_text("https://user:password@example.com/feed")
+
+    assert exc_info.value.error_code == ErrorCode.INVALID_REQUEST
+
+
 async def test_get_json_rejects_private_dns_result(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(socket, "getaddrinfo", _private_dns)
     client = SafeHttpClient(allowed_hosts={"example.com"})
