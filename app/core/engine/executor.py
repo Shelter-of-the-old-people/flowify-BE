@@ -22,6 +22,7 @@ from app.models.execution import (
     WorkflowExecution,
 )
 from app.models.workflow import EdgeDefinition, NodeDefinition
+from app.services.source_freshness_service import SourceCheckpointCommit, SourceFreshnessService
 from app.services.spring_callback_service import SpringExecutionCallbackService
 
 # ── 취소 레지스트리 ──
@@ -66,6 +67,7 @@ class WorkflowExecutor:
         self._db = db
         self._factory = NodeFactory()
         self._callback_service = callback_service or SpringExecutionCallbackService()
+        self._source_freshness_service = SourceFreshnessService(db)
 
     async def execute(
         self,
@@ -103,6 +105,7 @@ class WorkflowExecutor:
         edge_outputs: dict[tuple[str, str], dict[str, Any]] = {}
         skipped_nodes: set[str] = set()
         handled_nodes: set[str] = set()
+        pending_source_commits: list[SourceCheckpointCommit] = []
 
         try:
             for node_id in execution_order:
@@ -152,9 +155,9 @@ class WorkflowExecutor:
                 node_log = await self._execute_node(
                     node_def, input_data, service_tokens, snapshot_manager
                 )
-                execution.nodeLogs.append(node_log)
 
                 if node_log.status == "failed":
+                    execution.nodeLogs.append(node_log)
                     # 실패 시: 이후 모든 노드 skip
                     logged_ids = {log.nodeId for log in execution.nodeLogs}
                     for rem_id in execution_order:
@@ -178,8 +181,24 @@ class WorkflowExecutor:
                     await self._finalize_execution(execution_id, execution)
                     return execution
 
+                freshness_decision = await self._source_freshness_service.filter_output(
+                    user_id=user_id,
+                    workflow_id=workflow_id,
+                    node=node_def,
+                    payload=node_log.outputData or {},
+                )
+                node_log.outputData = freshness_decision.payload
+                if freshness_decision.pending_commit:
+                    pending_source_commits.append(freshness_decision.pending_commit)
+
+                execution.nodeLogs.append(node_log)
+
                 # v2: 성공 시 canonical payload를 node_outputs에 저장
                 node_outputs[node_id] = node_log.outputData or {}
+
+                if freshness_decision.no_new_items:
+                    skipped_nodes.update(self._get_descendants(node_id, adjacency))
+                    continue
 
                 # Loop 반복 실행 처리
                 runtime_type = getattr(node_def, "runtime_type", None) or node_def.type
@@ -265,6 +284,7 @@ class WorkflowExecutor:
             state_manager.transition(WorkflowState.SUCCESS)
             execution.state = WorkflowState.SUCCESS
             execution.finishedAt = datetime.now(UTC)
+            await self._source_freshness_service.commit_pending(pending_source_commits)
             await self._finalize_execution(execution_id, execution)
             return execution
 

@@ -424,6 +424,33 @@ async def test_web_news_seboard_posts_runs_without_token() -> None:
     )
 
 
+async def test_web_news_seboard_new_posts_reuses_seboard_fetch() -> None:
+    """SE Board 신규 공지 mode는 기존 SE Board 목록 조회를 재사용합니다."""
+    strategy = InputNodeStrategy({})
+    node = _source_node("web_news", "seboard_new_posts", "2")
+
+    with patch("app.core.nodes.input_node.WebNewsService") as mock_web_news_class:
+        mock_web_news = mock_web_news_class.return_value
+        mock_web_news.fetch_articles = AsyncMock(
+            return_value={
+                "type": "ARTICLE_LIST",
+                "items": [{"id": "123", "title": "Release note"}],
+                "metadata": {"provider": "seboard", "count": 1},
+            }
+        )
+
+        result = await strategy.execute(node, None, {})
+
+    assert result["type"] == "ARTICLE_LIST"
+    assert strategy.validate(node) is True
+    mock_web_news.fetch_articles.assert_awaited_once_with(
+        "seboard_posts",
+        "2",
+        limit=10,
+        include_content=False,
+    )
+
+
 async def test_web_news_website_feed_runs_without_token() -> None:
     """website_feed source returns ARTICLE_LIST without OAuth token."""
     strategy = InputNodeStrategy({})
@@ -477,6 +504,31 @@ async def test_naver_news_article_search_runs_without_token() -> None:
     mock_naver_news.search_articles.assert_awaited_once_with(
         "인공지능",
         limit=2,
+    )
+
+
+async def test_naver_news_new_articles_uses_news_search() -> None:
+    """네이버 신규 기사 mode는 최신 뉴스 검색 adapter를 사용합니다."""
+    strategy = InputNodeStrategy({})
+    node = _source_node("naver_news", "new_articles", "AI")
+
+    with patch("app.core.nodes.input_node.NaverNewsService") as mock_naver_news_class:
+        mock_naver_news = mock_naver_news_class.return_value
+        mock_naver_news.search_articles = AsyncMock(
+            return_value={
+                "type": "ARTICLE_LIST",
+                "items": [{"id": "news-1", "title": "AI news"}],
+                "metadata": {"provider": "naver_news", "count": 1},
+            }
+        )
+
+        result = await strategy.execute(node, None, {})
+
+    assert result["type"] == "ARTICLE_LIST"
+    assert strategy.validate(node) is True
+    mock_naver_news.search_articles.assert_awaited_once_with(
+        "AI",
+        limit=10,
     )
 
 

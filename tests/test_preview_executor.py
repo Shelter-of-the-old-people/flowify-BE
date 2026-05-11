@@ -231,6 +231,39 @@ async def test_web_news_website_feed_preview_returns_article_list_without_token(
     )
 
 
+async def test_web_news_new_posts_preview_reuses_seboard_fetch() -> None:
+    executor = WorkflowPreviewExecutor()
+    node = _source_node("web_news", "seboard_new_posts", "2")
+
+    with patch("app.core.engine.preview_executor.WebNewsService") as mock_web_news_class:
+        mock_web_news = mock_web_news_class.return_value
+        mock_web_news.fetch_articles = AsyncMock(
+            return_value={
+                "type": "ARTICLE_LIST",
+                "items": [{"id": "123", "title": "Release note"}],
+                "metadata": {"provider": "seboard", "count": 1},
+            }
+        )
+
+        response = await executor.preview_node(
+            workflow_id="wf1",
+            node_id="node_source",
+            nodes=[node],
+            service_tokens={},
+            limit=5,
+            include_content=False,
+        )
+
+    assert response.available is True
+    assert response.output_data["type"] == "ARTICLE_LIST"
+    mock_web_news.fetch_articles.assert_awaited_once_with(
+        "seboard_posts",
+        "2",
+        limit=5,
+        include_content=False,
+    )
+
+
 async def test_naver_news_preview_returns_article_list_without_token() -> None:
     executor = WorkflowPreviewExecutor()
     node = _source_node("naver_news", "article_search", "인공지능")
@@ -259,6 +292,37 @@ async def test_naver_news_preview_returns_article_list_without_token() -> None:
     assert response.output_data["items"][0]["title"] == "AI news"
     mock_naver_news.search_articles.assert_awaited_once_with(
         "인공지능",
+        limit=5,
+    )
+
+
+async def test_naver_news_new_articles_preview_uses_news_search() -> None:
+    executor = WorkflowPreviewExecutor()
+    node = _source_node("naver_news", "new_articles", "AI")
+
+    with patch("app.core.engine.preview_executor.NaverNewsService") as mock_naver_news_class:
+        mock_naver_news = mock_naver_news_class.return_value
+        mock_naver_news.search_articles = AsyncMock(
+            return_value={
+                "type": "ARTICLE_LIST",
+                "items": [{"id": "news-1", "title": "AI news"}],
+                "metadata": {"provider": "naver_news", "count": 1},
+            }
+        )
+
+        response = await executor.preview_node(
+            workflow_id="wf1",
+            node_id="node_source",
+            nodes=[node],
+            service_tokens={},
+            limit=5,
+            include_content=False,
+        )
+
+    assert response.available is True
+    assert response.output_data["type"] == "ARTICLE_LIST"
+    mock_naver_news.search_articles.assert_awaited_once_with(
+        "AI",
         limit=5,
     )
 

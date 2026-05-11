@@ -32,6 +32,21 @@ def _make_callback_service() -> MagicMock:
     return callback_service
 
 
+def _freshness_source_node() -> NodeDefinition:
+    return NodeDefinition(
+        id="node_1",
+        type="web_news",
+        config={"source_mode": "seboard_new_posts", "target": "2"},
+        runtime_type="input",
+        runtime_source={
+            "service": "web_news",
+            "mode": "seboard_new_posts",
+            "target": "2",
+            "canonical_input_type": "ARTICLE_LIST",
+        },
+    )
+
+
 class TestTopologicalSort:
     def test_linear_chain(self):
         nodes = _make_nodes("input", "llm", "output")
@@ -99,6 +114,44 @@ def _mock_factory(side_effect=None, return_value=None):
 
 
 class TestExecuteWorkflow:
+    @pytest.mark.asyncio
+    async def test_freshness_source_first_run_skips_downstream_and_commits_baseline(
+        self,
+        mock_db,
+    ):
+        """신규 항목 source 첫 실행은 기준점만 저장하고 downstream을 실행하지 않습니다."""
+        source_checkpoints = MagicMock()
+        source_checkpoints.find_one = AsyncMock(return_value=None)
+        source_checkpoints.update_one = AsyncMock()
+        mock_db.source_checkpoints = source_checkpoints
+        callback_service = _make_callback_service()
+        executor = WorkflowExecutor(mock_db, callback_service=callback_service)
+        executor._factory = _mock_factory(
+            return_value={
+                "type": "ARTICLE_LIST",
+                "items": [{"id": "post_1", "title": "공지"}],
+                "metadata": {"provider": "seboard", "count": 1},
+            }
+        )
+
+        nodes = [_freshness_source_node(), NodeDefinition(id="node_2", type="llm")]
+        edges = _make_edges(("node_1", "node_2"))
+
+        result = await executor.execute(
+            execution_id="exec_freshness_1",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=nodes,
+            edges=edges,
+            service_tokens={},
+        )
+
+        assert result.state == WorkflowState.SUCCESS
+        assert [log.status for log in result.nodeLogs] == ["success", "skipped"]
+        assert result.nodeLogs[0].outputData["items"] == []
+        assert result.nodeLogs[0].outputData["metadata"]["freshness"]["status"] == "initialized"
+        source_checkpoints.update_one.assert_awaited_once()
+
     @pytest.mark.asyncio
     async def test_linear_success(self, mock_db):
         """input -> llm -> output 선형 워크플로우 성공 테스트."""

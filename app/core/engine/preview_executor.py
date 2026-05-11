@@ -302,8 +302,9 @@ class WorkflowPreviewExecutor:
         include_content: bool,
     ) -> dict[str, Any]:
         svc = WebNewsService()
+        fetch_mode = "seboard_posts" if mode == "seboard_new_posts" else mode
         return await svc.fetch_articles(
-            mode,
+            fetch_mode,
             target,
             limit=limit,
             include_content=include_content,
@@ -315,7 +316,7 @@ class WorkflowPreviewExecutor:
         target: str,
         limit: int,
     ) -> dict[str, Any]:
-        if mode != "article_search":
+        if mode not in {"article_search", "new_articles"}:
             raise FlowifyException(
                 ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
                 detail=f"service=naver_news, mode={mode} preview is not supported",

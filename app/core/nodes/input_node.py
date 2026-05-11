@@ -40,8 +40,8 @@ SUPPORTED_SOURCES: dict[str, set[str]] = {
     "google_sheets": {"sheet_all", "new_row", "row_updated"},
     "slack": {"channel_messages"},
     "canvas_lms": {"course_files", "course_new_file", "term_all_files"},
-    "naver_news": {"article_search"},
-    "web_news": {"seboard_posts", "website_feed"},
+    "naver_news": {"article_search", "new_articles"},
+    "web_news": {"seboard_posts", "seboard_new_posts", "website_feed"},
 }
 
 TOKENLESS_SOURCES = frozenset({"web_crawl", "web_news", "naver_news"})
@@ -474,7 +474,7 @@ class InputNodeStrategy(NodeStrategy):
         target: str,
         config: dict[str, Any],
     ) -> dict[str, Any]:
-        if mode != "article_search":
+        if mode not in {"article_search", "new_articles"}:
             raise FlowifyException(
                 ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
                 detail=f"service=naver_news, mode={mode} is not supported",
@@ -493,8 +493,9 @@ class InputNodeStrategy(NodeStrategy):
         config: dict[str, Any],
     ) -> dict[str, Any]:
         svc = WebNewsService()
+        fetch_mode = "seboard_posts" if mode == "seboard_new_posts" else mode
         return await svc.fetch_articles(
-            mode,
+            fetch_mode,
             target,
             limit=self._resolve_article_limit(config),
             include_content=bool(config.get("includeContent") or config.get("include_content")),
