@@ -190,6 +190,41 @@ async def test_google_sheets_update_row_by_key(service_tokens: dict) -> None:
     )
 
 
+async def test_google_sheets_update_row_by_key_preserves_existing_columns(service_tokens: dict) -> None:
+    strategy = OutputNodeStrategy({})
+    node = _sink_node(
+        "google_sheets",
+        spreadsheet_id="sheet_123",
+        sheet_name="Results",
+        write_mode="update_row_by_key",
+        key_column="id",
+    )
+    input_data = {
+        "type": "API_RESPONSE",
+        "data": {"id": "2", "status": "done"},
+    }
+
+    with patch("app.core.nodes.output_node.GoogleSheetsService") as mock_sheets_class:
+        mock_sheets = mock_sheets_class.return_value
+        mock_sheets.read_range = AsyncMock(
+            return_value=[
+                ["id", "subject", "status"],
+                ["1", "alpha", "open"],
+                ["2", "beta", "pending"],
+            ]
+        )
+        mock_sheets.write_range = AsyncMock(return_value={"updatedRange": "Results!A3:C3"})
+
+        await strategy.execute(node, input_data, service_tokens)
+
+    mock_sheets.write_range.assert_awaited_once_with(
+        service_tokens["google_sheets"],
+        "sheet_123",
+        "Results!A3:C3",
+        [["2", "beta", "done"]],
+    )
+
+
 async def test_google_sheets_upsert_row_by_key_appends_when_missing(service_tokens: dict) -> None:
     strategy = OutputNodeStrategy({})
     node = _sink_node(
@@ -227,6 +262,46 @@ async def test_google_sheets_upsert_row_by_key_appends_when_missing(service_toke
         "sheet_123",
         "Results",
         [["3", "new"]],
+    )
+
+
+async def test_google_sheets_upsert_row_by_key_preserves_existing_columns_on_update(service_tokens: dict) -> None:
+    strategy = OutputNodeStrategy({})
+    node = _sink_node(
+        "google_sheets",
+        spreadsheet_id="sheet_123",
+        sheet_name="Results",
+        write_mode="upsert_row_by_key",
+        key_column="id",
+    )
+    input_data = {
+        "type": "API_RESPONSE",
+        "data": {"id": "2", "status": "done"},
+    }
+
+    with patch("app.core.nodes.output_node.GoogleSheetsService") as mock_sheets_class:
+        mock_sheets = mock_sheets_class.return_value
+        mock_sheets.read_range = AsyncMock(
+            return_value=[
+                ["id", "subject", "status"],
+                ["1", "alpha", "open"],
+                ["2", "beta", "pending"],
+            ]
+        )
+        mock_sheets.write_range = AsyncMock(return_value={"updatedRange": "Results!A3:C3"})
+
+        result = await strategy.execute(node, input_data, service_tokens)
+
+    assert result == {
+        "status": "sent",
+        "service": "google_sheets",
+        "detail": {"mode": "upsert", "updated": 1, "inserted": 0},
+    }
+    mock_sheets.write_range.assert_awaited_once_with(
+        service_tokens["google_sheets"],
+        "sheet_123",
+        "Results!A3:C3",
+        [["2", "beta", "done"]],
     )
 
 

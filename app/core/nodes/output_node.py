@@ -429,21 +429,28 @@ class OutputNodeStrategy(NodeStrategy):
                 continue
 
             target_row_index = self._find_google_sheets_row_index(existing_headers, existing_rows, key_column, key_value)
-            target_row_values = [normalize_cell(record.get(header, "")) for header in existing_headers]
 
             if target_row_index is not None:
+                existing_row = existing_rows[target_row_index - 2] if target_row_index - 2 < len(existing_rows) else []
+                merged_record = row_to_record(existing_headers, existing_row)
+                for header, value in record.items():
+                    merged_record[header] = normalize_cell(value)
+                target_row_values = [normalize_cell(merged_record.get(header, "")) for header in existing_headers]
                 await svc.write_range(
                     token,
                     spreadsheet_id,
                     self._single_row_range(range_a1, len(existing_headers), target_row_index),
                     [target_row_values],
                 )
+                if target_row_index - 2 < len(existing_rows):
+                    existing_rows[target_row_index - 2] = target_row_values
                 updated += 1
                 continue
 
             if not allow_insert:
                 continue
 
+            target_row_values = [normalize_cell(record.get(header, "")) for header in existing_headers]
             await svc.append_rows(token, spreadsheet_id, range_a1, [target_row_values])
             existing_rows.append(target_row_values)
             inserted += 1
