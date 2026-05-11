@@ -1,61 +1,64 @@
 # FastAPI Google Sheets Node Design
 
-> **작성일** 2026-05-11
-> **대상 저장소** `flowify-BE`
-> **범위** FastAPI runtime 관점의 Google Sheets 노드 설계
-> **관련 저장소** `flowify-FE`, `flowify-BE-spring`
+> 작성일: 2026-05-11
+> 대상 저장소: `flowify-BE`
+> 범위: FastAPI runtime 기준 Google Sheets 노드 실행 설계
+> 관련 저장소: `flowify-FE`, `flowify-BE-spring`
 
 ---
 
 ## 1. 목적
 
-이 문서는 Google Sheets를 `시작 노드`, `중간 노드`, `끝 노드`로 사용할 때 FastAPI가 맡아야 하는 실행 책임을 정의한다.
+이 문서는 Google Sheets 노드에 대해 FastAPI가 런타임에서 맡아야 하는 책임과 실행 규칙을 정의한다.
 
-이번 설계의 핵심은 아래와 같다.
+FastAPI는 picker UI나 생성 오케스트레이션을 담당하지 않고, 실제 실행 엔진 역할을 맡는다.
 
-- FastAPI는 실제 시트 읽기, 검색, lookup, diff 계산, 쓰기를 수행한다.
-- 스프레드시트/시트 생성은 설정 단계의 책임이며, Spring이 관리한다.
-- FastAPI는 생성 UI나 생성 API의 owner가 아니다.
-- `new_row`, `row_updated`는 상태 기반 diff를 계산하되, durable state commit은 Spring이 맡는다.
+Google Sheets는 아래 세 역할을 모두 지원해야 한다.
 
----
-
-## 2. 사용자 자동화 기준
-
-FastAPI가 안정적으로 지원해야 하는 대표 시나리오는 아래와 같다.
-
-- 시트 전체를 읽어 요약 또는 보고서 생성
-- 특정 단어가 포함된 행만 검색
-- 특정 key 행을 lookup 해서 후속 판단
-- 새 행이 들어왔을 때만 처리
-- 수정된 행만 처리
-- 결과를 append, overwrite, update, upsert
-
-즉 이 저장소의 Google Sheets 책임은 `실행 시점에 데이터를 정확히 읽고 계산하고 쓰는 것`이다.
+- 시작 노드
+- 중간 노드
+- 끝 노드
 
 ---
 
-## 3. FastAPI 책임 범위
+## 2. 런타임 목표
 
-### 3.1 FastAPI가 하는 일
+FastAPI는 아래와 같은 대표 자동화를 안정적으로 지원해야 한다.
 
-- Google Sheets API 호출
-- 시트 범위 읽기
-- 텍스트 검색
-- key 기반 lookup
-- `new_row`, `row_updated` diff 계산
-- append / overwrite / update / upsert 실행
-- 다음 성공 실행에 반영할 `node_state_update` 계산
+- 시트 전체 읽기
+- 특정 범위 읽기
+- 키워드 검색
+- 기준 컬럼으로 한 행 조회
+- 마지막 성공 실행 이후 새로 추가된 행만 방출
+- 마지막 성공 실행 이후 수정된 행만 방출
+- 결과를 시트에 추가 저장
+- 선택 범위를 덮어쓰기
+- 기준 컬럼으로 기존 행 부분 수정
+- 기준 컬럼으로 업서트
 
-### 3.2 FastAPI가 하지 않는 일
+---
 
-- 스프레드시트 파일 생성
-- 시트 탭 생성
-- picker 목록 관리
-- durable state 저장
-- schedule 등록
+## 3. 책임 경계
 
-이 기능들은 Spring과 FE의 설정 단계에서 처리한다.
+### 3.1 FastAPI가 담당하는 것
+
+- Google Sheets API 읽기와 쓰기 실행
+- 범위 읽기
+- 검색과 조회 실행
+- `new_row` diff 계산
+- `row_updated` diff 계산
+- 부분 수정과 업서트 갱신 경로의 행 병합
+- 성공 실행 후 `node_state_update` 계산
+
+### 3.2 FastAPI가 담당하지 않는 것
+
+- 스프레드시트 생성 UI
+- 시트 생성 UI
+- picker 목록 조회
+- durable node state 영속화
+- 저장 시점 검증의 최종 owner 역할
+
+위 항목은 `flowify-BE-spring`과 `flowify-FE`가 담당한다.
 
 ---
 
@@ -63,54 +66,27 @@ FastAPI가 안정적으로 지원해야 하는 대표 시나리오는 아래와 
 
 ### 4.1 RuntimeSource
 
-Google Sheets 시작 노드는 아래 정보를 받아야 한다.
+Google Sheets 시작 노드는 `RuntimeSource`를 통해 실행된다.
 
-```python
-class RuntimeSource(BaseModel):
-    service: str
-    mode: str
-    target: str = ""
-    canonical_input_type: str = ""
-    config: dict[str, Any] = Field(default_factory=dict)
-    state: dict[str, Any] | None = None
-```
+필수 필드:
+
+- `service = google_sheets`
+- `mode`
+- `target = spreadsheet_id`
+- `config`
 
 Google Sheets source config 예시:
 
-```json
-{
-  "service": "google_sheets",
-  "mode": "row_updated",
-  "target": "spreadsheet_123",
-  "canonical_input_type": "SPREADSHEET_DATA",
-  "config": {
-    "spreadsheet_id": "spreadsheet_123",
-    "sheet_name": "Responses",
-    "range_a1": "Responses!A:Z",
-    "header_row": 1,
-    "data_start_row": 2,
-    "key_column": "submission_id",
-    "initial_sync_mode": "skip_existing"
-  },
-  "state": {
-    "last_seen_row_index": 201,
-    "row_snapshot": {
-      "sub_001": "hash-a"
-    }
-  }
-}
-```
+- `sheet_name`
+- `range_a1`
+- `header_row`
+- `data_start_row`
+- `initial_sync_mode`
+- `key_column`
 
 ### 4.2 RuntimeAction
 
-Google Sheets 중간 노드는 service action 형태를 사용한다.
-
-```python
-class RuntimeAction(BaseModel):
-    service: str
-    action: str
-    config: dict[str, Any] = Field(default_factory=dict)
-```
+Google Sheets 중간 노드는 구조화된 액션 설정으로 실행된다.
 
 지원 액션:
 
@@ -118,9 +94,11 @@ class RuntimeAction(BaseModel):
 - `search_text`
 - `lookup_row_by_key`
 
-### 4.3 RuntimeSink
+### 4.3 Runtime sink
 
-Google Sheets 끝 노드는 아래 쓰기 모드를 지원한다.
+Google Sheets 끝 노드는 sink config를 통해 실행된다.
+
+지원 저장 방식:
 
 - `append_rows`
 - `overwrite_range`
@@ -129,153 +107,224 @@ Google Sheets 끝 노드는 아래 쓰기 모드를 지원한다.
 
 ---
 
-## 5. 역할별 동작
+## 5. 시작 노드 동작
 
-### 5.1 시작 노드
+### 5.1 `sheet_all`
 
-지원 모드:
+동작:
 
-- `sheet_all`
-- `new_row`
-- `row_updated`
+- 선택한 시트 또는 범위를 읽는다.
+- 헤더와 데이터 행을 정규화한다.
+- 구조화된 표 형태로 반환한다.
 
-동작 요약:
+### 5.2 `new_row`
 
-- `sheet_all`: 현재 범위를 그대로 읽어 `SPREADSHEET_DATA` 반환
-- `new_row`: 마지막 성공 실행 이후 새로 추가된 행만 반환
-- `row_updated`: `key_column` 기준으로 수정된 행만 반환
+동작:
 
-### 5.2 중간 노드
+- 현재 행을 읽는다.
+- 이전 성공 실행에서 저장된 상태와 비교한다.
+- 마지막 기준점 이후 새로 추가된 행만 방출한다.
 
-지원 액션:
+사용 상태값:
 
-- `read_range`
-- `search_text`
-- `lookup_row_by_key`
+- `last_seen_row_index`
+- `header_signature`
 
-동작 요약:
+첫 실행 모드:
 
-- `read_range`: 지정 범위를 읽어 그대로 반환
-- `search_text`: 지정 컬럼 또는 전체 컬럼에서 검색
-- `lookup_row_by_key`: key에 맞는 단일 행을 찾아 `API_RESPONSE`로 반환
+- `skip_existing`
+  - 현재 데이터를 기준점으로만 저장하고 결과는 비운다.
+- `emit_existing`
+  - 첫 실행에서 현재 행도 함께 방출한다.
 
-### 5.3 끝 노드
+### 5.3 `row_updated`
 
-지원 쓰기 방식:
+동작:
 
-- `append_rows`
-- `overwrite_range`
-- `update_row_by_key`
-- `upsert_row_by_key`
+- 현재 행을 읽는다.
+- `key_column` 기준으로 행 맵을 만든다.
+- 각 행의 해시를 계산한다.
+- 이전 스냅샷과 비교해 변경된 행만 방출한다.
 
-동작 요약:
+사용 상태값:
 
-- append: 새 행 누적
-- overwrite: 범위 전체 덮어쓰기
-- update: key가 있는 행만 갱신
-- upsert: key가 있으면 갱신, 없으면 추가
+- `row_snapshot`
+- `header_signature`
 
----
-
-## 6. 상태 기반 diff
-
-### 6.1 new_row
-
-- 현재 row count를 읽는다.
-- `last_seen_row_index` 이후 행만 추출한다.
-- 첫 실행에서 `skip_existing`이면 현재 마지막 행만 기준점으로 저장하고 결과는 비운다.
-
-### 6.2 row_updated
+중요 규칙:
 
 - `key_column`은 필수다.
-- 현재 행을 key 기준 map으로 정규화한다.
-- row hash를 계산한다.
-- 이전 `row_snapshot`과 비교해 hash가 바뀐 key만 반환한다.
 
-### 6.3 node_state_update
+Mongo-safe 상태 규칙:
 
-FastAPI는 성공 후보 상태만 계산해 callback payload로 보낸다.
-
-예시:
-
-```json
-{
-  "nodeStateUpdates": [
-    {
-      "nodeId": "node_start_sheet",
-      "service": "google_sheets",
-      "state": {
-        "last_seen_row_index": 205,
-        "row_snapshot": {
-          "sub_001": "hash-b"
-        }
-      }
-    }
-  ]
-}
-```
-
-실제 commit은 Spring이 한다.
+- 이메일처럼 `.`가 들어간 키는 그대로 Mongo map key로 저장하면 안 된다.
+- 저장 전 escape하고, 읽을 때 다시 복원해야 한다.
 
 ---
 
-## 7. 생성 기능과의 관계
+## 6. 중간 노드 동작
 
-이번 설계에서 생성 기능은 `설정 단계 생성`만 포함한다.
+### 6.1 `read_range`
 
-- 사용자가 목록에 원하는 스프레드시트가 없으면 FE -> Spring 생성 API로 새 파일을 만든다.
-- 사용자가 선택한 스프레드시트에 원하는 탭이 없으면 FE -> Spring 생성 API로 새 시트를 만든다.
-- 같은 이름의 스프레드시트가 여러 개 있을 수 있으므로 FastAPI는 `spreadsheet_id`만 신뢰하고 제목은 표시용 메타데이터로만 본다.
-- 같은 이름의 시트 탭은 한 스프레드시트 안에서 중복 생성하지 않는 정책을 전제로 한다.
-- FastAPI는 이미 선택된 `spreadsheet_id`, `sheet_name`을 받아 실행만 한다.
+동작:
 
-즉 FastAPI에는 `create_spreadsheet`, `create_sheet` 런타임 책임을 넣지 않는다.
+- 선택한 범위를 읽는다.
+- 헤더와 데이터 행이 있는 표 형태로 반환한다.
 
----
+### 6.2 `search_text`
 
-## 8. 검증 계획
+동작:
 
-- `sheet_all` source 테스트
-- `new_row` first-run / follow-up 테스트
-- `row_updated` 수정 감지 테스트
-- `search_text` static / input binding 테스트
-- `lookup_row_by_key` 테스트
-- `append_rows`, `overwrite_range`, `update_row_by_key`, `upsert_row_by_key` 테스트
-- executor가 `nodeStateUpdates`를 callback에 실어 보내는지 테스트
+- 선택한 컬럼 또는 전체 행을 대상으로 텍스트를 검색한다.
+- exact 또는 contains를 지원한다.
+- 대소문자 구분 여부를 지원한다.
+- 고정 값 또는 입력 필드 바인딩을 검색값 소스로 지원한다.
 
----
+유효한 검색 설정은 아래 둘 중 하나를 만족해야 한다.
 
-## 9. V1 범위
+- `search_value`가 있다.
+- `search_source = input_field` 이고 `search_field`가 있다.
 
-이번 V1에 포함:
+둘 다 없으면 런타임에서 거부해야 한다.
 
-- `sheet_all`
-- `new_row`
-- `row_updated`
-- `read_range`
-- `search_text`
-- `lookup_row_by_key`
-- `append_rows`
-- `overwrite_range`
-- `update_row_by_key`
-- `upsert_row_by_key`
-- `RuntimeSource.config/state`
-- `RuntimeAction`
-- `nodeStateUpdates`
+### 6.3 `lookup_row_by_key`
 
-이번 V1에서 제외:
+동작:
 
-- row deletion event
-- regex / fuzzy search
-- 다중 spreadsheet join
-- Apps Script / push webhook 기반 실시간 이벤트
-- 런타임 자동 생성
+- `key_column` 기준으로 한 행을 찾는다.
+- 고정 값 또는 입력 필드 바인딩을 조회값 소스로 지원한다.
+- 매칭된 행과 메타데이터를 반환한다.
+
+중요 규칙:
+
+- `key_column`은 대상 시트 헤더에 실제로 존재해야 한다.
 
 ---
 
-## 10. 결정 요약
+## 7. 끝 노드 동작
 
-- FastAPI는 Google Sheets의 실행 엔진이다.
-- 생성은 설정 단계에서 Spring이 처리하고, FastAPI는 이미 결정된 대상에 대해서만 읽기/검색/쓰기/차이 계산을 수행한다.
-- `new_row`, `row_updated`는 상태 기반 diff로 정식 지원한다.
-- 사용자가 자주 원하는 `전체 읽기`, `검색`, `lookup`, `upsert` 중심으로 V1을 고정한다.
+### 7.1 `append_rows`
+
+동작:
+
+- 기존 데이터 아래에 새 행을 추가한다.
+- 옵션에 따라 헤더를 초기화할 수 있다.
+
+### 7.2 `overwrite_range`
+
+동작:
+
+- 선택한 범위를 새 결과 표로 교체한다.
+
+### 7.3 `update_row_by_key`
+
+동작:
+
+- `key_column`으로 기존 행 하나를 찾는다.
+- 들어온 컬럼만 기존 행에 병합한다.
+- 입력에 없는 컬럼은 유지한다.
+- 병합된 전체 행을 다시 쓴다.
+
+중요 규칙:
+
+- 이 동작은 부분 수정이어야 한다.
+- 전달되지 않은 컬럼을 빈 문자열로 지우면 안 된다.
+
+### 7.4 `upsert_row_by_key`
+
+동작:
+
+- 같은 키의 행이 있으면 기존 행에 병합한다.
+- 없으면 새 행을 추가한다.
+
+중요 규칙:
+
+- update 경로는 `update_row_by_key`와 같은 부분 수정 규칙을 사용해야 한다.
+
+---
+
+## 8. 출력 의미
+
+Google Sheets 노드는 다음 노드가 재사용할 수 있는 구조화된 출력을 반환해야 한다.
+
+주요 필드:
+
+- `headers`
+- `rows`
+- `rowCount`
+- `metadata`
+
+쓰기 동작은 추가로 아래 요약값을 반환할 수 있다.
+
+- 영향을 받은 행 수
+- insert/update 요약
+
+상태를 가지는 시작 노드는 성공 시 아래도 계산해야 한다.
+
+- `node_state_update`
+
+이 상태 업데이트는 FastAPI가 계산하지만, 실제 commit은 Spring이 callback 이후 수행한다.
+
+---
+
+## 9. 검증 기대사항
+
+FastAPI는 아래와 같은 잘못된 설정을 런타임에서 막아야 한다.
+
+- `key_column`이 빠진 update, lookup, row_updated
+- `key_column`이 실제 헤더에 없는 경우
+- `search_text`인데 검색값 소스가 없는 경우
+- 필요한 범위 설정이 빠진 경우
+
+Spring 쪽 저장 시점 검증이 있더라도, FastAPI도 런타임 보호막 역할을 해야 한다.
+
+---
+
+## 10. 실제 사용 시나리오 대응 범위
+
+현재 런타임 설계는 아래 시나리오를 염두에 둔다.
+
+- Gmail 메일을 Google Sheets staging 시트로 적재
+- Gmail 메일을 sender 또는 message id 기준으로 upsert
+- 시트 전체를 읽어 보고서 생성
+- 키워드 검색 결과를 다른 탭에 저장
+- 정책표 lookup
+- `new_row` 기반 대기열 처리
+- `row_updated` 기반 사람 개입 후속 처리
+
+---
+
+## 11. 테스트 기대사항
+
+아래가 충족되면 FastAPI 동작이 올바르다고 본다.
+
+- `search_text`가 contains, exact, case-sensitive, case-insensitive, input binding을 지원한다.
+- `lookup_row_by_key`가 매치/미매치 모두 올바르게 처리된다.
+- `new_row`가 `skip_existing`, `emit_existing`를 지원한다.
+- `row_updated`가 변경된 행만 감지한다.
+- `update_row_by_key`가 전달되지 않은 컬럼을 유지한다.
+- `upsert_row_by_key`가 update 시 부분 수정, insert 시 신규 추가를 수행한다.
+- 모든 경로가 Spring callback 흐름 안에서 정상 동작한다.
+
+---
+
+## 12. 결정 요약
+
+FastAPI는 Google Sheets 실행 엔진이다.
+
+반드시 제대로 해야 하는 일:
+
+- 읽기
+- 검색
+- 조회
+- diff 계산
+- 추가 저장
+- 덮어쓰기
+- 부분 수정
+- 업서트
+
+직접 owner가 아닌 일:
+
+- picker 생성 UX
+- durable state 영속화 오케스트레이션
+- 스프레드시트/시트 생성 UI
