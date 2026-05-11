@@ -14,7 +14,9 @@ from app.services.integrations.canvas_lms import CanvasLmsService
 from app.services.integrations.gmail import GmailService
 from app.services.integrations.google_drive import GoogleDriveService
 from app.services.integrations.google_sheets import GoogleSheetsService
+from app.services.integrations.naver_news import NaverNewsService
 from app.services.integrations.slack import SlackService
+from app.services.integrations.web_news import WebNewsService
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +40,11 @@ SUPPORTED_SOURCES: dict[str, set[str]] = {
     "google_sheets": {"sheet_all", "new_row", "row_updated"},
     "slack": {"channel_messages"},
     "canvas_lms": {"course_files", "course_new_file", "term_all_files"},
+    "naver_news": {"article_search", "new_articles"},
+    "web_news": {"seboard_posts", "seboard_new_posts", "website_feed"},
 }
+
+TOKENLESS_SOURCES = frozenset({"web_crawl", "web_news", "naver_news"})
 
 
 class InputNodeStrategy(NodeStrategy):
@@ -62,7 +68,7 @@ class InputNodeStrategy(NodeStrategy):
         config = node.get("config") or {}
 
         token = service_tokens.get(service, "")
-        if not token and service not in ("web_crawl",):
+        if not token and service not in TOKENLESS_SOURCES:
             raise FlowifyException(
                 ErrorCode.OAUTH_TOKEN_INVALID,
                 detail=f"'{service}' 서비스의 토큰이 없습니다.",
@@ -84,6 +90,10 @@ class InputNodeStrategy(NodeStrategy):
             return await self._fetch_slack(token, mode, target)
         if service == "canvas_lms":
             return await self._fetch_canvas_lms(token, mode, target)
+        if service == "naver_news":
+            return await self._fetch_naver_news(mode, target, config)
+        if service == "web_news":
+            return await self._fetch_web_news(mode, target, config)
 
         raise FlowifyException(
             ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
@@ -455,3 +465,50 @@ class InputNodeStrategy(NodeStrategy):
             ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
             detail=f"service=canvas_lms, mode={mode} is not supported",
         )
+
+    # Web news
+
+    async def _fetch_naver_news(
+        self,
+        mode: str,
+        target: str,
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
+        if mode not in {"article_search", "new_articles"}:
+            raise FlowifyException(
+                ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
+                detail=f"service=naver_news, mode={mode} is not supported",
+            )
+
+        svc = NaverNewsService()
+        return await svc.search_articles(
+            target,
+            limit=self._resolve_article_limit(config),
+        )
+
+    async def _fetch_web_news(
+        self,
+        mode: str,
+        target: str,
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
+        svc = WebNewsService()
+        fetch_mode = "seboard_posts" if mode == "seboard_new_posts" else mode
+        return await svc.fetch_articles(
+            fetch_mode,
+            target,
+            limit=self._resolve_article_limit(config),
+            include_content=bool(config.get("includeContent") or config.get("include_content")),
+        )
+
+    @staticmethod
+    def _resolve_article_limit(config: dict[str, Any]) -> int:
+        raw_value = config.get("maxResults", config.get("limit"))
+        if raw_value in (None, ""):
+            return 10
+
+        try:
+            return int(raw_value)
+        except (TypeError, ValueError):
+            logger.warning("Invalid article limit value for web_news source: %s", raw_value)
+            return 10

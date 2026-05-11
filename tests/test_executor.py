@@ -32,6 +32,21 @@ def _make_callback_service() -> MagicMock:
     return callback_service
 
 
+def _freshness_source_node() -> NodeDefinition:
+    return NodeDefinition(
+        id="node_1",
+        type="web_news",
+        config={"source_mode": "seboard_new_posts", "target": "2"},
+        runtime_type="input",
+        runtime_source={
+            "service": "web_news",
+            "mode": "seboard_new_posts",
+            "target": "2",
+            "canonical_input_type": "ARTICLE_LIST",
+        },
+    )
+
+
 class TestTopologicalSort:
     def test_linear_chain(self):
         nodes = _make_nodes("input", "llm", "output")
@@ -99,6 +114,53 @@ def _mock_factory(side_effect=None, return_value=None):
 
 
 class TestExecuteWorkflow:
+    @pytest.mark.asyncio
+    async def test_freshness_source_first_run_skips_downstream_and_commits_baseline(
+        self,
+        mock_db,
+    ):
+        """신규 항목 source 첫 실행은 기준점만 저장하고 downstream을 실행하지 않습니다."""
+        source_checkpoints = MagicMock()
+        source_checkpoints.find_one = AsyncMock(return_value=None)
+        source_checkpoints.update_one = AsyncMock()
+        mock_db.source_checkpoints = source_checkpoints
+        callback_service = _make_callback_service()
+        call_order = MagicMock()
+        call_order.attach_mock(mock_db.workflow_executions.update_one, "save_execution")
+        call_order.attach_mock(source_checkpoints.update_one, "commit_checkpoint")
+        call_order.attach_mock(callback_service.notify_execution_complete, "notify_spring")
+        executor = WorkflowExecutor(mock_db, callback_service=callback_service)
+        executor._factory = _mock_factory(
+            return_value={
+                "type": "ARTICLE_LIST",
+                "items": [{"id": "post_1", "title": "공지"}],
+                "metadata": {"provider": "seboard", "count": 1},
+            }
+        )
+
+        nodes = [_freshness_source_node(), NodeDefinition(id="node_2", type="llm")]
+        edges = _make_edges(("node_1", "node_2"))
+
+        result = await executor.execute(
+            execution_id="exec_freshness_1",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=nodes,
+            edges=edges,
+            service_tokens={},
+        )
+
+        assert result.state == WorkflowState.SUCCESS
+        assert [log.status for log in result.nodeLogs] == ["success", "skipped"]
+        assert result.nodeLogs[0].outputData["items"] == []
+        assert result.nodeLogs[0].outputData["metadata"]["freshness"]["status"] == "initialized"
+        source_checkpoints.update_one.assert_awaited_once()
+        assert [mock_call[0] for mock_call in call_order.mock_calls][-3:] == [
+            "save_execution",
+            "commit_checkpoint",
+            "notify_spring",
+        ]
+
     @pytest.mark.asyncio
     async def test_linear_success(self, mock_db):
         """input -> llm -> output 선형 워크플로우 성공 테스트."""
@@ -892,6 +954,21 @@ class TestToLoopItemPayload:
         result = WorkflowExecutor._to_loop_item_payload("EMAIL_LIST", "SINGLE_EMAIL", item, {})
         assert result["type"] == "SINGLE_EMAIL"
         assert result["subject"] == "Hi"
+
+    def test_article_list_to_text(self):
+        item = {
+            "title": "Release note",
+            "source": "SE Board",
+            "url": "https://seboard.site/posts/123",
+            "content": "Full content",
+        }
+        result = WorkflowExecutor._to_loop_item_payload("ARTICLE_LIST", "TEXT", item, {})
+
+        assert result["type"] == "TEXT"
+        assert result["article"] == item
+        assert "Title: Release note" in result["content"]
+        assert "URL: https://seboard.site/posts/123" in result["content"]
+        assert "Full content" in result["content"]
 
     def test_spreadsheet_data_row(self):
         loop_input = {"headers": ["name", "age"], "rows": [["Alice", 30]]}

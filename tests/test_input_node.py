@@ -396,6 +396,142 @@ async def test_missing_token_raises_oauth_error() -> None:
     assert exc_info.value.error_code == ErrorCode.OAUTH_TOKEN_INVALID
 
 
+async def test_web_news_seboard_posts_runs_without_token() -> None:
+    """web_news source returns ARTICLE_LIST without OAuth token."""
+    strategy = InputNodeStrategy({})
+    node = _source_node("web_news", "seboard_posts", "2")
+    node["config"] = {"maxResults": 3, "includeContent": True}
+
+    with patch("app.core.nodes.input_node.WebNewsService") as mock_web_news_class:
+        mock_web_news = mock_web_news_class.return_value
+        mock_web_news.fetch_articles = AsyncMock(
+            return_value={
+                "type": "ARTICLE_LIST",
+                "items": [{"id": "123", "title": "Release note"}],
+                "metadata": {"provider": "seboard", "count": 1},
+            }
+        )
+
+        result = await strategy.execute(node, None, {})
+
+    assert result["type"] == "ARTICLE_LIST"
+    assert result["items"][0]["title"] == "Release note"
+    mock_web_news.fetch_articles.assert_awaited_once_with(
+        "seboard_posts",
+        "2",
+        limit=3,
+        include_content=True,
+    )
+
+
+async def test_web_news_seboard_new_posts_reuses_seboard_fetch() -> None:
+    """SE Board 신규 공지 mode는 기존 SE Board 목록 조회를 재사용합니다."""
+    strategy = InputNodeStrategy({})
+    node = _source_node("web_news", "seboard_new_posts", "2")
+
+    with patch("app.core.nodes.input_node.WebNewsService") as mock_web_news_class:
+        mock_web_news = mock_web_news_class.return_value
+        mock_web_news.fetch_articles = AsyncMock(
+            return_value={
+                "type": "ARTICLE_LIST",
+                "items": [{"id": "123", "title": "Release note"}],
+                "metadata": {"provider": "seboard", "count": 1},
+            }
+        )
+
+        result = await strategy.execute(node, None, {})
+
+    assert result["type"] == "ARTICLE_LIST"
+    assert strategy.validate(node) is True
+    mock_web_news.fetch_articles.assert_awaited_once_with(
+        "seboard_posts",
+        "2",
+        limit=10,
+        include_content=False,
+    )
+
+
+async def test_web_news_website_feed_runs_without_token() -> None:
+    """website_feed source returns ARTICLE_LIST without OAuth token."""
+    strategy = InputNodeStrategy({})
+    node = _source_node("web_news", "website_feed", "https://example.com")
+    node["config"] = {"maxResults": 2}
+
+    with patch("app.core.nodes.input_node.WebNewsService") as mock_web_news_class:
+        mock_web_news = mock_web_news_class.return_value
+        mock_web_news.fetch_articles = AsyncMock(
+            return_value={
+                "type": "ARTICLE_LIST",
+                "items": [{"id": "post-1", "title": "RSS release"}],
+                "metadata": {"provider": "rss", "count": 1},
+            }
+        )
+
+        result = await strategy.execute(node, None, {})
+
+    assert result["type"] == "ARTICLE_LIST"
+    assert result["items"][0]["title"] == "RSS release"
+    assert strategy.validate(node) is True
+    mock_web_news.fetch_articles.assert_awaited_once_with(
+        "website_feed",
+        "https://example.com",
+        limit=2,
+        include_content=False,
+    )
+
+
+async def test_naver_news_article_search_runs_without_token() -> None:
+    """naver_news source returns ARTICLE_LIST without OAuth token."""
+    strategy = InputNodeStrategy({})
+    node = _source_node("naver_news", "article_search", "인공지능")
+    node["config"] = {"maxResults": 2}
+
+    with patch("app.core.nodes.input_node.NaverNewsService") as mock_naver_news_class:
+        mock_naver_news = mock_naver_news_class.return_value
+        mock_naver_news.search_articles = AsyncMock(
+            return_value={
+                "type": "ARTICLE_LIST",
+                "items": [{"id": "news-1", "title": "AI news"}],
+                "metadata": {"provider": "naver_news", "count": 1},
+            }
+        )
+
+        result = await strategy.execute(node, None, {})
+
+    assert result["type"] == "ARTICLE_LIST"
+    assert result["items"][0]["title"] == "AI news"
+    assert strategy.validate(node) is True
+    mock_naver_news.search_articles.assert_awaited_once_with(
+        "인공지능",
+        limit=2,
+    )
+
+
+async def test_naver_news_new_articles_uses_news_search() -> None:
+    """네이버 신규 기사 mode는 최신 뉴스 검색 adapter를 사용합니다."""
+    strategy = InputNodeStrategy({})
+    node = _source_node("naver_news", "new_articles", "AI")
+
+    with patch("app.core.nodes.input_node.NaverNewsService") as mock_naver_news_class:
+        mock_naver_news = mock_naver_news_class.return_value
+        mock_naver_news.search_articles = AsyncMock(
+            return_value={
+                "type": "ARTICLE_LIST",
+                "items": [{"id": "news-1", "title": "AI news"}],
+                "metadata": {"provider": "naver_news", "count": 1},
+            }
+        )
+
+        result = await strategy.execute(node, None, {})
+
+    assert result["type"] == "ARTICLE_LIST"
+    assert strategy.validate(node) is True
+    mock_naver_news.search_articles.assert_awaited_once_with(
+        "AI",
+        limit=10,
+    )
+
+
 async def test_unsupported_source_raises() -> None:
     """지원하지 않는 source는 UNSUPPORTED_RUNTIME_SOURCE를 발생시킵니다."""
     strategy = InputNodeStrategy({})

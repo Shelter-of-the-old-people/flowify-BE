@@ -163,6 +163,13 @@ class LLMNodeStrategy(NodeStrategy):
         if data_type == "FILE_LIST":
             items = input_data.get("items", [])
             return "\n".join(LLMNodeStrategy._format_file_list_item(item) for item in items)
+        if data_type == "ARTICLE_LIST":
+            items = input_data.get("items", [])
+            return "\n\n---\n\n".join(
+                LLMNodeStrategy._format_article_item(item, index)
+                for index, item in enumerate(items, start=1)
+                if isinstance(item, dict)
+            )
         if data_type == "EMAIL_LIST":
             items = input_data.get("items", [])
             formatted_items = []
@@ -237,6 +244,31 @@ class LLMNodeStrategy(NodeStrategy):
         if item.get("url"):
             parts.append(f"  Source URL: {item.get('url', '')}")
         return "\n".join(parts)
+
+    @staticmethod
+    def _format_article_item(item: dict[str, Any], index: int) -> str:
+        parts = [
+            f"[Article {index}]",
+            f"Title: {item.get('title', '')}",
+        ]
+        if item.get("source"):
+            parts.append(f"Source: {item.get('source', '')}")
+        if item.get("author"):
+            parts.append(f"Author: {item.get('author', '')}")
+        if item.get("published_at"):
+            parts.append(f"Published At: {item.get('published_at', '')}")
+        if item.get("url"):
+            parts.append(f"URL: {item.get('url', '')}")
+
+        summary = item.get("summary")
+        if summary:
+            parts.extend(["Summary:", str(summary)])
+
+        content = item.get("content")
+        if content:
+            parts.extend(["Content:", str(content)])
+
+        return "\n".join(parts).strip()
 
     @staticmethod
     def _build_output_payload(

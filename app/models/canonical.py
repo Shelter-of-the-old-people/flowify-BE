@@ -20,6 +20,7 @@ class CanonicalType(StrEnum):
     SPREADSHEET_DATA = "SPREADSHEET_DATA"
     SCHEDULE_DATA = "SCHEDULE_DATA"
     API_RESPONSE = "API_RESPONSE"
+    ARTICLE_LIST = "ARTICLE_LIST"
     TEXT = "TEXT"
 
 
@@ -121,7 +122,28 @@ class ApiResponsePayload(BaseModel):
     source: str | None = None
 
 
-# ── TEXT ──
+# -- ARTICLE_LIST --
+
+
+class ArticleItem(BaseModel):
+    id: str | None = None
+    title: str
+    url: str | None = None
+    source: str | None = None
+    author: str | None = None
+    published_at: str | None = None
+    summary: str | None = None
+    content: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ArticleListPayload(BaseModel):
+    type: str = CanonicalType.ARTICLE_LIST
+    items: list[ArticleItem] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+# -- TEXT --
 
 
 class TextPayload(BaseModel):

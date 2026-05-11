@@ -12,6 +12,10 @@ from app.models.workflow import NodeDefinition
 from app.services.integrations.canvas_lms import CanvasLmsService
 from app.services.integrations.gmail import GmailService
 from app.services.integrations.google_drive import GoogleDriveService
+from app.services.integrations.naver_news import NaverNewsService
+from app.services.integrations.web_news import WebNewsService
+
+TOKENLESS_SOURCES = frozenset({"web_news", "naver_news"})
 
 
 class WorkflowPreviewExecutor:
@@ -76,7 +80,7 @@ class WorkflowPreviewExecutor:
 
         service = runtime_source.service
         token = service_tokens.get(service, "")
-        if not token and service not in ("web_crawl",):
+        if not token and service not in TOKENLESS_SOURCES:
             raise FlowifyException(
                 ErrorCode.OAUTH_TOKEN_INVALID,
                 detail=f"'{service}' 서비스의 토큰이 없습니다.",
@@ -104,6 +108,20 @@ class WorkflowPreviewExecutor:
                 runtime_source.mode,
                 runtime_source.target,
                 limit,
+            )
+        if service == "naver_news":
+            return await self._preview_naver_news(
+                runtime_source.mode,
+                runtime_source.target,
+                limit,
+            )
+        if service == "web_news":
+            return await self._preview_web_news(
+                runtime_source.mode,
+                runtime_source.target,
+                node.config,
+                limit,
+                include_content,
             )
 
         raise FlowifyException(
@@ -276,6 +294,48 @@ class WorkflowPreviewExecutor:
             ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
             detail=f"service=canvas_lms, mode={mode} preview is not supported",
         )
+
+    async def _preview_web_news(
+        self,
+        mode: str,
+        target: str,
+        config: dict[str, Any],
+        limit: int,
+        include_content: bool,
+    ) -> dict[str, Any]:
+        svc = WebNewsService()
+        fetch_mode = "seboard_posts" if mode == "seboard_new_posts" else mode
+        return await svc.fetch_articles(
+            fetch_mode,
+            target,
+            limit=limit,
+            include_content=include_content,
+            keyword=self._source_keyword(config),
+        )
+
+    async def _preview_naver_news(
+        self,
+        mode: str,
+        target: str,
+        limit: int,
+    ) -> dict[str, Any]:
+        if mode not in {"article_search", "new_articles"}:
+            raise FlowifyException(
+                ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
+                detail=f"service=naver_news, mode={mode} preview is not supported",
+            )
+
+        svc = NaverNewsService()
+        return await svc.search_articles(target, limit=limit)
+
+    @staticmethod
+    def _source_keyword(config: dict[str, Any]) -> str | None:
+        value = config.get("keyword")
+        if not isinstance(value, str):
+            return None
+
+        keyword = value.strip()
+        return keyword or None
 
     @staticmethod
     def _find_node(nodes: list[NodeDefinition], node_id: str) -> NodeDefinition:
