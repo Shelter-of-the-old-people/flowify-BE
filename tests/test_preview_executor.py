@@ -6,10 +6,16 @@ from app.core.engine.preview_executor import WorkflowPreviewExecutor
 from app.models.workflow import NodeDefinition
 
 
-def _source_node(service: str, mode: str, target: str = "target_1") -> NodeDefinition:
+def _source_node(
+    service: str,
+    mode: str,
+    target: str = "target_1",
+    config: dict | None = None,
+) -> NodeDefinition:
     return NodeDefinition(
         id="node_source",
         type=service,
+        config=config or {},
         role="start",
         runtime_type="input",
         runtime_source={
@@ -194,6 +200,7 @@ async def test_web_news_preview_returns_article_list_without_token() -> None:
         "2",
         limit=5,
         include_content=False,
+        keyword=None,
     )
 
 
@@ -228,6 +235,7 @@ async def test_web_news_website_feed_preview_returns_article_list_without_token(
         "https://example.com",
         limit=5,
         include_content=False,
+        keyword=None,
     )
 
 
@@ -261,6 +269,45 @@ async def test_web_news_new_posts_preview_reuses_seboard_fetch() -> None:
         "2",
         limit=5,
         include_content=False,
+        keyword=None,
+    )
+
+
+async def test_web_news_new_posts_preview_passes_keyword() -> None:
+    executor = WorkflowPreviewExecutor()
+    node = _source_node(
+        "web_news",
+        "seboard_new_posts",
+        "2",
+        config={"keyword": " 장학 "},
+    )
+
+    with patch("app.core.engine.preview_executor.WebNewsService") as mock_web_news_class:
+        mock_web_news = mock_web_news_class.return_value
+        mock_web_news.fetch_articles = AsyncMock(
+            return_value={
+                "type": "ARTICLE_LIST",
+                "items": [{"id": "123", "title": "장학 공지"}],
+                "metadata": {"provider": "seboard", "count": 1},
+            }
+        )
+
+        response = await executor.preview_node(
+            workflow_id="wf1",
+            node_id="node_source",
+            nodes=[node],
+            service_tokens={},
+            limit=5,
+            include_content=False,
+        )
+
+    assert response.available is True
+    mock_web_news.fetch_articles.assert_awaited_once_with(
+        "seboard_posts",
+        "2",
+        limit=5,
+        include_content=False,
+        keyword="장학",
     )
 
 

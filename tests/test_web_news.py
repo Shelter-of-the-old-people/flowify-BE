@@ -100,6 +100,31 @@ async def test_seboard_include_content_fetches_post_detail(
     assert result[0]["metadata"]["dislike_count"] == 0
 
 
+async def test_seboard_list_posts_filters_by_keyword(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(socket, "getaddrinfo", _public_dns)
+    matching_post = _seboard_post()
+    matching_post["title"] = "장학 공지"
+    other_post = _seboard_post()
+    other_post["postId"] = 124
+    other_post["title"] = "수강 신청 안내"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"content": [matching_post, other_post]},
+            request=request,
+        )
+
+    client = SafeHttpClient(transport=httpx.MockTransport(handler))
+    service = SeBoardService(client)
+
+    result = await service.list_posts("2", limit=5, keyword=" 장학 ")
+
+    assert [item["title"] for item in result] == ["장학 공지"]
+
+
 async def test_web_news_fetch_articles_returns_article_list() -> None:
     class FakeSeBoardService:
         async def list_posts(
@@ -108,15 +133,22 @@ async def test_web_news_fetch_articles_returns_article_list() -> None:
             *,
             limit: int,
             include_content: bool,
+            keyword: str | None = None,
         ) -> list[dict[str, Any]]:
             assert category_id == "2"
             assert limit == 3
             assert include_content is False
+            assert keyword == "장학"
             return [_seboard_post()]
 
     service = WebNewsService(FakeSeBoardService())
 
-    result = await service.fetch_articles("seboard_posts", "2", limit=3)
+    result = await service.fetch_articles(
+        "seboard_posts",
+        "2",
+        limit=3,
+        keyword="장학",
+    )
 
     assert result["type"] == "ARTICLE_LIST"
     assert result["items"][0]["title"] == "Release note"

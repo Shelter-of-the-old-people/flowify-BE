@@ -23,6 +23,7 @@ class WebNewsService:
         *,
         limit: int = DEFAULT_LIMIT,
         include_content: bool = False,
+        keyword: str | None = None,
     ) -> dict[str, Any]:
         if mode == "seboard_posts":
             normalized_limit = self._normalize_limit(limit)
@@ -30,6 +31,7 @@ class WebNewsService:
                 target,
                 limit=normalized_limit,
                 include_content=include_content,
+                keyword=keyword,
             )
             return {
                 "type": "ARTICLE_LIST",

@@ -19,15 +19,10 @@ FRESHNESS_SOURCE_MODES = frozenset(
     }
 )
 MAX_SEEN_ITEM_KEYS = 200
-_RESULT_SHAPING_CONFIG_KEYS = frozenset(
-    {
-        "includeContent",
-        "include_content",
-        "limit",
-        "maxResults",
-        "max_results",
-    }
-)
+CHECKPOINT_CONFIG_KEY_ALLOWLIST: dict[tuple[str, str], frozenset[str]] = {
+    ("naver_news", "new_articles"): frozenset(),
+    ("web_news", "seboard_new_posts"): frozenset({"keyword"}),
+}
 
 
 @dataclass(frozen=True)
@@ -132,15 +127,21 @@ class SourceFreshnessService:
             previous_seen_keys=seen_keys,
             current_keys=current_keys,
         )
+        filtered_new_items = self._filter_new_items(
+            service=service,
+            mode=mode,
+            node=node,
+            items=new_items,
+        )
         return SourceFreshnessDecision(
             self._with_freshness_metadata(
                 payload,
-                new_items,
-                status="new_items" if new_items else "no_new_items",
+                filtered_new_items,
+                status="new_items" if filtered_new_items else "no_new_items",
                 checked_count=len(items),
             ),
             pending_commit,
-            not new_items,
+            not filtered_new_items,
         )
 
     async def commit_pending(self, commits: list[SourceCheckpointCommit]) -> None:
@@ -176,15 +177,21 @@ class SourceFreshnessService:
             "nodeId": node.id,
             "service": service,
             "mode": mode,
-            "targetHash": self._target_hash(target, node.config),
+            "targetHash": self._target_hash(service, mode, target, node.config),
         }
 
     @staticmethod
-    def _target_hash(target: str, config: dict[str, Any]) -> str:
+    def _target_hash(
+        service: str,
+        mode: str,
+        target: str,
+        config: dict[str, Any],
+    ) -> str:
+        allowed_keys = CHECKPOINT_CONFIG_KEY_ALLOWLIST.get((service, mode), frozenset())
         stable_config = {
             key: value
             for key, value in config.items()
-            if key not in _RESULT_SHAPING_CONFIG_KEYS
+            if key in allowed_keys
         }
         raw_value = json.dumps(
             {"target": target, "config": stable_config},
@@ -212,6 +219,41 @@ class SourceFreshnessService:
             return title.strip()
 
         return None
+
+    @classmethod
+    def _filter_new_items(
+        cls,
+        *,
+        service: str,
+        mode: str,
+        node: NodeDefinition,
+        items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if service != "web_news" or mode != "seboard_new_posts":
+            return items
+
+        keyword = cls._keyword_filter(node.config)
+        if keyword is None:
+            return items
+
+        return [
+            item for item in items
+            if cls._item_matches_keyword(item, keyword)
+        ]
+
+    @staticmethod
+    def _keyword_filter(config: dict[str, Any]) -> str | None:
+        value = config.get("keyword")
+        if not isinstance(value, str):
+            return None
+
+        keyword = value.strip().casefold()
+        return keyword or None
+
+    @staticmethod
+    def _item_matches_keyword(item: dict[str, Any], keyword: str) -> bool:
+        title = item.get("title")
+        return isinstance(title, str) and keyword in title.casefold()
 
     @staticmethod
     def _build_commit(

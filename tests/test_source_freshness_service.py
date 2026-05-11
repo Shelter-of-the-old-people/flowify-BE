@@ -6,16 +6,25 @@ from app.models.workflow import NodeDefinition
 from app.services.source_freshness_service import SourceFreshnessService
 
 
-def _source_node(mode: str = "seboard_new_posts") -> NodeDefinition:
+def _source_node(
+    mode: str = "seboard_new_posts",
+    *,
+    target: str = "2",
+    config: dict | None = None,
+) -> NodeDefinition:
+    node_config = {"source_mode": mode, "target": target, "maxResults": 10}
+    if config:
+        node_config.update(config)
+
     return NodeDefinition(
         id="source_1",
         type="web_news",
-        config={"source_mode": mode, "maxResults": 10},
+        config=node_config,
         runtime_type="input",
         runtime_source={
             "service": "web_news",
             "mode": mode,
-            "target": "2",
+            "target": target,
             "canonical_input_type": "ARTICLE_LIST",
         },
     )
@@ -90,6 +99,68 @@ async def test_existing_checkpoint_filters_only_new_items(mock_db: MagicMock) ->
 
 
 @pytest.mark.asyncio
+async def test_keyword_filters_new_items_after_checkpoint_detection(mock_db: MagicMock) -> None:
+    """Keyword filtering should not prevent checkpoint updates for fetched source items."""
+    mock_db.source_checkpoints.find_one.return_value = {
+        "cursorValue": "post_1",
+        "seenItemKeys": ["post_1"],
+    }
+    service = SourceFreshnessService(mock_db)
+    payload = {
+        "type": "ARTICLE_LIST",
+        "items": [
+            {"id": "post_3", "title": "장학 공지"},
+            {"id": "post_2", "title": "수강 신청 안내"},
+            {"id": "post_1", "title": "기준 글"},
+        ],
+        "metadata": {"provider": "seboard", "count": 3},
+    }
+
+    decision = await service.filter_output(
+        user_id="user_1",
+        workflow_id="workflow_1",
+        node=_source_node(config={"keyword": " 장학 "}),
+        payload=payload,
+    )
+
+    assert decision.no_new_items is False
+    assert [item["id"] for item in decision.payload["items"]] == ["post_3"]
+    assert decision.pending_commit is not None
+    assert decision.pending_commit.document["cursorValue"] == "post_3"
+    assert decision.pending_commit.document["seenItemKeys"][:2] == ["post_3", "post_2"]
+
+
+@pytest.mark.asyncio
+async def test_keyword_without_matches_still_updates_checkpoint(mock_db: MagicMock) -> None:
+    """New source items should be marked as seen even when keyword filtering skips them."""
+    mock_db.source_checkpoints.find_one.return_value = {
+        "cursorValue": "post_1",
+        "seenItemKeys": ["post_1"],
+    }
+    service = SourceFreshnessService(mock_db)
+    payload = {
+        "type": "ARTICLE_LIST",
+        "items": [
+            {"id": "post_2", "title": "수강 신청 안내"},
+            {"id": "post_1", "title": "기준 글"},
+        ],
+        "metadata": {"provider": "seboard", "count": 2},
+    }
+
+    decision = await service.filter_output(
+        user_id="user_1",
+        workflow_id="workflow_1",
+        node=_source_node(config={"keyword": "장학"}),
+        payload=payload,
+    )
+
+    assert decision.no_new_items is True
+    assert decision.payload["items"] == []
+    assert decision.pending_commit is not None
+    assert decision.pending_commit.document["cursorValue"] == "post_2"
+
+
+@pytest.mark.asyncio
 async def test_non_freshness_source_returns_payload_unchanged(mock_db: MagicMock) -> None:
     """신규 감지 대상이 아닌 source mode는 checkpoint를 사용하지 않습니다."""
     service = SourceFreshnessService(mock_db)
@@ -129,6 +200,94 @@ async def test_payload_without_item_keys_does_not_filter_items(mock_db: MagicMoc
     assert decision.no_new_items is False
     assert decision.pending_commit is None
     mock_db.source_checkpoints.find_one.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_display_config_does_not_change_checkpoint_hash(mock_db: MagicMock) -> None:
+    """UI display config should not reset the source checkpoint."""
+    mock_db.source_checkpoints.find_one.return_value = None
+    service = SourceFreshnessService(mock_db)
+
+    base_decision = await service.filter_output(
+        user_id="user_1",
+        workflow_id="workflow_1",
+        node=_source_node(config={"target_label": "공지", "target_meta": {"urlId": "notice"}}),
+        payload=_payload("post_1"),
+    )
+    display_decision = await service.filter_output(
+        user_id="user_1",
+        workflow_id="workflow_1",
+        node=_source_node(
+            config={
+                "target_label": "공지사항",
+                "target_meta": {"urlId": "notice", "displayOrder": 1},
+                "trigger_kind": "event",
+                "canonical_input_type": "ARTICLE_LIST",
+            }
+        ),
+        payload=_payload("post_1"),
+    )
+
+    assert base_decision.pending_commit is not None
+    assert display_decision.pending_commit is not None
+    assert (
+        base_decision.pending_commit.query["targetHash"]
+        == display_decision.pending_commit.query["targetHash"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_target_change_updates_checkpoint_hash(mock_db: MagicMock) -> None:
+    """A different source target should use a different checkpoint."""
+    mock_db.source_checkpoints.find_one.return_value = None
+    service = SourceFreshnessService(mock_db)
+
+    first_decision = await service.filter_output(
+        user_id="user_1",
+        workflow_id="workflow_1",
+        node=_source_node(target="2"),
+        payload=_payload("post_1"),
+    )
+    second_decision = await service.filter_output(
+        user_id="user_1",
+        workflow_id="workflow_1",
+        node=_source_node(target="3"),
+        payload=_payload("post_1"),
+    )
+
+    assert first_decision.pending_commit is not None
+    assert second_decision.pending_commit is not None
+    assert (
+        first_decision.pending_commit.query["targetHash"]
+        != second_decision.pending_commit.query["targetHash"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_keyword_change_updates_checkpoint_hash(mock_db: MagicMock) -> None:
+    """A different keyword should use a different checkpoint."""
+    mock_db.source_checkpoints.find_one.return_value = None
+    service = SourceFreshnessService(mock_db)
+
+    first_decision = await service.filter_output(
+        user_id="user_1",
+        workflow_id="workflow_1",
+        node=_source_node(config={"keyword": "장학"}),
+        payload=_payload("post_1"),
+    )
+    second_decision = await service.filter_output(
+        user_id="user_1",
+        workflow_id="workflow_1",
+        node=_source_node(config={"keyword": "수강신청"}),
+        payload=_payload("post_1"),
+    )
+
+    assert first_decision.pending_commit is not None
+    assert second_decision.pending_commit is not None
+    assert (
+        first_decision.pending_commit.query["targetHash"]
+        != second_decision.pending_commit.query["targetHash"]
+    )
 
 
 @pytest.mark.asyncio

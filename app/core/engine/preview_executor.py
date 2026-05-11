@@ -119,6 +119,7 @@ class WorkflowPreviewExecutor:
             return await self._preview_web_news(
                 runtime_source.mode,
                 runtime_source.target,
+                node.config,
                 limit,
                 include_content,
             )
@@ -298,6 +299,7 @@ class WorkflowPreviewExecutor:
         self,
         mode: str,
         target: str,
+        config: dict[str, Any],
         limit: int,
         include_content: bool,
     ) -> dict[str, Any]:
@@ -308,6 +310,7 @@ class WorkflowPreviewExecutor:
             target,
             limit=limit,
             include_content=include_content,
+            keyword=self._source_keyword(config),
         )
 
     async def _preview_naver_news(
@@ -324,6 +327,15 @@ class WorkflowPreviewExecutor:
 
         svc = NaverNewsService()
         return await svc.search_articles(target, limit=limit)
+
+    @staticmethod
+    def _source_keyword(config: dict[str, Any]) -> str | None:
+        value = config.get("keyword")
+        if not isinstance(value, str):
+            return None
+
+        keyword = value.strip()
+        return keyword or None
 
     @staticmethod
     def _find_node(nodes: list[NodeDefinition], node_id: str) -> NodeDefinition:

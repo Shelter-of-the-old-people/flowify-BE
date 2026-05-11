@@ -25,6 +25,7 @@ class SeBoardService:
         *,
         limit: int = DEFAULT_LIMIT,
         include_content: bool = False,
+        keyword: str | None = None,
     ) -> list[dict[str, Any]]:
         if not category_id:
             raise FlowifyException(
@@ -44,6 +45,12 @@ class SeBoardService:
         posts = self._extract_posts(response)
 
         items = [self._to_article_item(post, category_id) for post in posts]
+        normalized_keyword = self._normalize_keyword(keyword)
+        if normalized_keyword:
+            items = [
+                item for item in items
+                if self._matches_keyword(item, normalized_keyword)
+            ]
         if include_content:
             for item in items:
                 detail = await self.get_post_detail(item["id"])
@@ -127,3 +134,16 @@ class SeBoardService:
     @staticmethod
     def _normalize_limit(limit: int) -> int:
         return max(1, min(limit, MAX_LIMIT))
+
+    @staticmethod
+    def _normalize_keyword(keyword: str | None) -> str | None:
+        if not keyword:
+            return None
+
+        normalized_keyword = keyword.strip().casefold()
+        return normalized_keyword or None
+
+    @staticmethod
+    def _matches_keyword(item: dict[str, Any], keyword: str) -> bool:
+        title = item.get("title")
+        return isinstance(title, str) and keyword in title.casefold()
