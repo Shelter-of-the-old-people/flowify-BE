@@ -125,6 +125,10 @@ class TestExecuteWorkflow:
         source_checkpoints.update_one = AsyncMock()
         mock_db.source_checkpoints = source_checkpoints
         callback_service = _make_callback_service()
+        call_order = MagicMock()
+        call_order.attach_mock(mock_db.workflow_executions.update_one, "save_execution")
+        call_order.attach_mock(source_checkpoints.update_one, "commit_checkpoint")
+        call_order.attach_mock(callback_service.notify_execution_complete, "notify_spring")
         executor = WorkflowExecutor(mock_db, callback_service=callback_service)
         executor._factory = _mock_factory(
             return_value={
@@ -151,6 +155,11 @@ class TestExecuteWorkflow:
         assert result.nodeLogs[0].outputData["items"] == []
         assert result.nodeLogs[0].outputData["metadata"]["freshness"]["status"] == "initialized"
         source_checkpoints.update_one.assert_awaited_once()
+        assert [mock_call[0] for mock_call in call_order.mock_calls][-3:] == [
+            "save_execution",
+            "commit_checkpoint",
+            "notify_spring",
+        ]
 
     @pytest.mark.asyncio
     async def test_linear_success(self, mock_db):

@@ -284,8 +284,9 @@ class WorkflowExecutor:
             state_manager.transition(WorkflowState.SUCCESS)
             execution.state = WorkflowState.SUCCESS
             execution.finishedAt = datetime.now(UTC)
+            await self._save_execution(execution_id, execution)
             await self._source_freshness_service.commit_pending(pending_source_commits)
-            await self._finalize_execution(execution_id, execution)
+            await self._callback_service.notify_execution_complete(execution_id, execution)
             return execution
 
         finally:
