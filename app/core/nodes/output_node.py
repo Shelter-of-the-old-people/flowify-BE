@@ -13,9 +13,11 @@ import httpx
 from app.common.errors import ErrorCode, FlowifyException
 from app.core.nodes.base import NodeStrategy
 from app.core.nodes.google_sheets_common import (
+    build_table_read_range,
     build_sheet_range,
+    column_letter,
     normalize_cell,
-    records_to_rows,
+    parse_sheet_range,
     row_to_record,
 )
 from app.services.integrations.gmail import GmailService
@@ -396,15 +398,31 @@ class OutputNodeStrategy(NodeStrategy):
         key_column: str,
         allow_insert: bool,
     ) -> dict[str, Any]:
-        existing_values = await svc.read_range(token, spreadsheet_id, range_a1)
+        parsed_range = parse_sheet_range(range_a1)
+        read_range = build_table_read_range(range_a1)
+        existing_values = await svc.read_range(token, spreadsheet_id, read_range)
         existing_headers = existing_values[0] if existing_values else []
         existing_rows = existing_values[1:] if len(existing_values) > 1 else []
+        start_row_index = parsed_range.start_row_index or 1
+        start_column_index = parsed_range.start_column_index or 1
+        first_data_row_index = start_row_index + 1
+
+        if incoming_headers and key_column not in incoming_headers:
+            raise FlowifyException(
+                ErrorCode.INVALID_REQUEST,
+                detail=f"Google Sheets incoming data must include key_column '{key_column}'.",
+            )
 
         if not existing_headers:
             if not incoming_headers:
                 raise FlowifyException(
                     ErrorCode.INVALID_REQUEST,
                     detail="Google Sheets update/upsert requires target sheet headers.",
+                )
+            if not allow_insert:
+                raise FlowifyException(
+                    ErrorCode.INVALID_REQUEST,
+                    detail="Google Sheets update_row_by_key requires existing target sheet headers.",
                 )
             await svc.write_range(token, spreadsheet_id, range_a1, [incoming_headers, *incoming_rows])
             return {
@@ -419,6 +437,16 @@ class OutputNodeStrategy(NodeStrategy):
                 detail=f"Google Sheets key_column '{key_column}' is not present in target sheet.",
             )
 
+        missing_headers = [
+            header for header in incoming_headers if header and header not in existing_headers
+        ]
+        if missing_headers:
+            raise FlowifyException(
+                ErrorCode.INVALID_REQUEST,
+                detail="Google Sheets incoming columns are not present in target sheet.",
+                context={"missing_headers": missing_headers},
+            )
+
         records = [row_to_record(incoming_headers, row) for row in incoming_rows]
         updated = 0
         inserted = 0
@@ -428,10 +456,17 @@ class OutputNodeStrategy(NodeStrategy):
             if not key_value:
                 continue
 
-            target_row_index = self._find_google_sheets_row_index(existing_headers, existing_rows, key_column, key_value)
+            target_row_index = self._find_google_sheets_row_index(
+                existing_headers,
+                existing_rows,
+                key_column,
+                key_value,
+                first_data_row_index=first_data_row_index,
+            )
 
             if target_row_index is not None:
-                existing_row = existing_rows[target_row_index - 2] if target_row_index - 2 < len(existing_rows) else []
+                relative_row_index = target_row_index - first_data_row_index
+                existing_row = existing_rows[relative_row_index] if relative_row_index < len(existing_rows) else []
                 merged_record = row_to_record(existing_headers, existing_row)
                 for header, value in record.items():
                     merged_record[header] = normalize_cell(value)
@@ -439,11 +474,16 @@ class OutputNodeStrategy(NodeStrategy):
                 await svc.write_range(
                     token,
                     spreadsheet_id,
-                    self._single_row_range(range_a1, len(existing_headers), target_row_index),
+                    self._single_row_range(
+                        parsed_range.sheet_name,
+                        start_column_index,
+                        len(existing_headers),
+                        target_row_index,
+                    ),
                     [target_row_values],
                 )
-                if target_row_index - 2 < len(existing_rows):
-                    existing_rows[target_row_index - 2] = target_row_values
+                if relative_row_index < len(existing_rows):
+                    existing_rows[relative_row_index] = target_row_values
                 updated += 1
                 continue
 
@@ -493,28 +533,27 @@ class OutputNodeStrategy(NodeStrategy):
         rows: list[list[Any]],
         key_column: str,
         key_value: str,
+        *,
+        first_data_row_index: int,
     ) -> int | None:
         key_index = headers.index(key_column)
-        for offset, row in enumerate(rows, start=2):
+        for offset, row in enumerate(rows, start=first_data_row_index):
             padded = list(row) + [""] * max(0, len(headers) - len(row))
             if normalize_cell(padded[key_index]) == key_value:
                 return offset
         return None
 
     @staticmethod
-    def _single_row_range(range_a1: str, column_count: int, row_index: int) -> str:
-        sheet_name = str(range_a1).split("!", 1)[0]
-        end_column = OutputNodeStrategy._column_letter(column_count)
-        return f"{sheet_name}!A{row_index}:{end_column}{row_index}"
-
-    @staticmethod
-    def _column_letter(column_index: int) -> str:
-        index = max(column_index, 1)
-        letters = []
-        while index:
-            index, remainder = divmod(index - 1, 26)
-            letters.append(chr(65 + remainder))
-        return "".join(reversed(letters))
+    def _single_row_range(
+        sheet_name: str,
+        start_column_index: int,
+        column_count: int,
+        row_index: int,
+    ) -> str:
+        start_column = column_letter(start_column_index)
+        end_column = column_letter(start_column_index + column_count - 1)
+        escaped_sheet_name = str(sheet_name).replace("'", "''")
+        return f"'{escaped_sheet_name}'!{start_column}{row_index}:{end_column}{row_index}"
 
     @staticmethod
     def _gmail_body_and_attachments(config: dict, input_data: dict) -> tuple[str, list[dict]]:

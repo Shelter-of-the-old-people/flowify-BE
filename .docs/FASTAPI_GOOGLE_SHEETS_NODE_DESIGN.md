@@ -212,6 +212,13 @@ Mongo-safe 상태 규칙:
 
 ### 7.2 `overwrite_range`
 
+범위 해석 규칙:
+
+- `range_a1`가 `A1`, `A1:B10`처럼 시트 이름 없는 형태이면 선택된 `sheet_name`을 앞에 붙여 해석한다.
+- 예:
+  - `sheet_name = MailSubset`, `range_a1 = A1` -> `MailSubset!A1`
+- `range_a1`에 이미 시트 이름이 포함돼 있으면 그 값을 그대로 사용한다.
+
 동작:
 
 - 선택한 범위를 새 결과 표로 교체한다.
@@ -307,6 +314,56 @@ Spring 쪽 저장 시점 검증이 있더라도, FastAPI도 런타임 보호막 
 - 모든 경로가 Spring callback 흐름 안에서 정상 동작한다.
 
 ---
+
+## 12.1 공통 표 가공 경로
+
+Google Sheets 저장 흐름은 메일 전용 시나리오가 아니라, 어떤 입력이든 `SPREADSHEET_DATA`로 정리한 뒤 시트에 쓰는 공통 경로를 포함해야 한다.
+FastAPI는 이 공통 표 가공 경로에서 `DATA_FILTER`가 만든 표형 payload를 안정적으로 받아 Google Sheets start/middle/end 노드와 이어지게 해야 한다.
+
+대표 입력 타입:
+
+- `SINGLE_EMAIL`
+- `SINGLE_FILE`
+- `SPREADSHEET_DATA`
+
+대표 표 가공 액션:
+
+- `filter_fields_table`
+  - 선택한 필드만 골라 표 컬럼으로 정리한다.
+- `filter_metadata_table`
+  - 파일 메타데이터를 표 컬럼으로 정리한다.
+
+셀 직렬화 규칙:
+
+- 문자열, 숫자, 불리언은 그대로 사용한다.
+- 리스트는 사람이 읽을 수 있는 문자열로 평탄화한다.
+- 딕셔너리 리스트는 `name`, `filename`, `title`, `email`, `id` 우선 순위로 대표 값을 뽑아 쉼표로 연결한다.
+- 예:
+  - 수신자 목록 `[{email: a}, {email: b}]` -> `a, b`
+  - 라벨 목록 `["INBOX", "IMPORTANT"]` -> `INBOX, IMPORTANT`
+  - 첨부 목록 `[{filename: agenda.pdf}]` -> `agenda.pdf`
+
+실사용 의미:
+
+- Gmail 메일을 시트 로그용 표로 정리할 수 있다.
+- 파일 메타데이터를 시트 자산 목록으로 정리할 수 있다.
+- 기존 시트 데이터를 다시 골라 다른 시트용 표로 재정리할 수 있다.
+
+## 12.2 향후 보완점
+
+FastAPI 런타임은 Google Sheets 중간 노드 기능을 계속 지원한다.
+
+지원 대상:
+
+- `read_range`
+- `search_text`
+- `lookup_row_by_key`
+
+다만 현재 제품 사용자 흐름에서는 FE 에디터가 공통 `data-process` 외의 중간 노드 타입을 직접 생성하지 못하므로, 위 기능은 현재 사용자 경로에서는 직접 노출되지 않는다.
+
+따라서 이번 이슈에서는 런타임 지원을 유지하되, 기능 노출은 보류 상태로 두고 문서에만 향후 보완점으로 남긴다.
+
+향후 FE 에디터에서 중간 노드 타입 확장이 열리면, FastAPI의 현재 중간 노드 실행 경로를 그대로 연결해 재사용한다.
 
 ## 12. 결정 요약
 
