@@ -9,6 +9,7 @@ import logging
 from typing import Any
 
 from app.common.errors import ErrorCode, FlowifyException
+from app.core.document_content import ensure_file_content_fields
 from app.core.nodes.base import NodeStrategy
 from app.core.nodes.google_sheets_common import (
     build_sheet_range,
@@ -148,20 +149,17 @@ class InputNodeStrategy(NodeStrategy):
                 include_folders=False,
             )
             if not files:
-                return {
+                return ensure_file_content_fields({
                     "type": "SINGLE_FILE",
                     "source_service": "google_drive",
                     "file_id": "",
                     "filename": "",
-                    "content": None,
-                    "extracted_text": None,
-                    "extraction_status": "not_requested",
                     "mime_type": "",
                     "size": None,
                     "url": "",
                     "created_time": "",
                     "modified_time": "",
-                }
+                })
 
             latest_file = files[0]
             return self._to_drive_single_file(latest_file)
@@ -183,25 +181,22 @@ class InputNodeStrategy(NodeStrategy):
         file_data: dict[str, Any], fallback_file_id: str = ""
     ) -> dict[str, Any]:
         file_id = file_data.get("id") or fallback_file_id
-        return {
+        return ensure_file_content_fields({
             "type": "SINGLE_FILE",
             "source_service": "google_drive",
             "file_id": file_id,
             "filename": file_data.get("name", ""),
-            "content": None,
-            "extracted_text": None,
-            "extraction_status": "not_requested",
             "mime_type": file_data.get("mimeType", ""),
             "size": file_data.get("size"),
             "created_time": file_data.get("createdTime", ""),
             "modified_time": file_data.get("modifiedTime", ""),
             "url": file_data.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}",
-        }
+        })
 
     @staticmethod
     def _to_drive_file_item(file_data: dict[str, Any]) -> dict[str, Any]:
         file_id = file_data.get("id", "")
-        return {
+        return ensure_file_content_fields({
             "source_service": "google_drive",
             "file_id": file_id,
             "filename": file_data.get("name", ""),
@@ -210,7 +205,7 @@ class InputNodeStrategy(NodeStrategy):
             "created_time": file_data.get("createdTime", ""),
             "modified_time": file_data.get("modifiedTime", ""),
             "url": file_data.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}",
-        }
+        })
 
     # Gmail
 
@@ -355,8 +350,9 @@ class InputNodeStrategy(NodeStrategy):
 
     @staticmethod
     def _to_file_items(attachments: list[dict]) -> list[dict[str, Any]]:
-        return [
-            {
+        items = []
+        for attachment in attachments:
+            item = {
                 "id": attachment.get("id", ""),
                 "name": attachment.get("name", attachment.get("filename", "")),
                 "filename": attachment.get("filename", ""),
@@ -370,8 +366,8 @@ class InputNodeStrategy(NodeStrategy):
                 "downloadUrl": attachment.get("downloadUrl"),
                 "url": attachment.get("url", ""),
             }
-            for attachment in attachments
-        ]
+            items.append(ensure_file_content_fields(item))
+        return items
 
     # Google Sheets
 

@@ -13,6 +13,7 @@ class NodeSnapshot(BaseModel):
 class ErrorDetail(BaseModel):
     code: str
     message: str
+    context: dict | None = None
     stackTrace: str | None = None  # noqa: N815
 
 

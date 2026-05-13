@@ -29,8 +29,15 @@ class CanonicalType(StrEnum):
 
 class SingleFilePayload(BaseModel):
     type: str = CanonicalType.SINGLE_FILE
+    source_service: str | None = None
+    file_id: str | None = None
     filename: str
     content: str | None = None
+    content_status: str = "not_requested"
+    content_error: str | None = None
+    content_metadata: dict[str, Any] = Field(default_factory=dict)
+    extracted_text: str | None = None
+    extraction_status: str | None = None
     mime_type: str | None = None
     url: str | None = None
 
@@ -39,7 +46,15 @@ class SingleFilePayload(BaseModel):
 
 
 class FileItem(BaseModel):
+    source_service: str | None = None
+    file_id: str | None = None
     filename: str
+    content: str | None = None
+    content_status: str = "not_requested"
+    content_error: str | None = None
+    content_metadata: dict[str, Any] = Field(default_factory=dict)
+    extracted_text: str | None = None
+    extraction_status: str | None = None
     mime_type: str | None = None
     size: int | None = None
     url: str | None = None
@@ -55,8 +70,16 @@ class FileListPayload(BaseModel):
 
 class EmailAttachment(BaseModel):
     filename: str
+    attachment_id: str | None = Field(default=None, alias="attachmentId")
+    message_id: str | None = Field(default=None, alias="messageId")
+    content: str | None = None
+    content_status: str = "not_requested"
+    content_error: str | None = None
+    content_metadata: dict[str, Any] = Field(default_factory=dict)
     mime_type: str | None = None
     size: int | None = None
+
+    model_config = {"populate_by_name": True}
 
 
 class SingleEmailPayload(BaseModel):

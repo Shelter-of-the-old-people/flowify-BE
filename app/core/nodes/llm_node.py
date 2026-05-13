@@ -4,13 +4,48 @@ import json
 from typing import Any
 
 from app.common.errors import ErrorCode, FlowifyException
+from app.core.document_content import (
+    CONTENT_STATUS_EMPTY,
+    CONTENT_STATUS_FAILED,
+    CONTENT_STATUS_NOT_REQUESTED,
+    CONTENT_STATUS_TOO_LARGE,
+    CONTENT_STATUS_UNSUPPORTED,
+    apply_extraction_to_file_payload,
+)
 from app.core.nodes.base import NodeStrategy
 from app.services.integrations.google_drive import GoogleDriveService
 from app.services.llm_service import LLMService
 
 PROMPT_REQUIRED_ACTIONS = frozenset({"process", "extract", "translate", "custom"})
 PROMPT_OPTIONAL_ACTIONS = frozenset({"summarize", "classify"})
-SUPPORTED_ACTIONS = PROMPT_REQUIRED_ACTIONS | PROMPT_OPTIONAL_ACTIONS
+CONTENT_DEPENDENT_ACTIONS = frozenset(
+    {
+        "summarize",
+        "extract",
+        "extract_info",
+        "translate",
+        "classify_by_content",
+        "describe_image",
+        "ocr",
+        "ai_summarize",
+        "ai_analyze",
+    }
+)
+SUPPORTED_ACTIONS = PROMPT_REQUIRED_ACTIONS | PROMPT_OPTIONAL_ACTIONS | CONTENT_DEPENDENT_ACTIONS
+CONTENT_FAILURE_STATUSES = frozenset(
+    {
+        CONTENT_STATUS_UNSUPPORTED,
+        CONTENT_STATUS_TOO_LARGE,
+        CONTENT_STATUS_FAILED,
+        CONTENT_STATUS_EMPTY,
+    }
+)
+DEFAULT_ACTION_PROMPTS = {
+    "extract_info": "문서 본문에서 중요한 정보와 결정 사항을 항목별로 추출하세요.",
+    "ai_analyze": "문서 본문을 분석하고 핵심 인사이트와 후속 조치를 정리하세요.",
+    "describe_image": "입력된 이미지 설명 또는 OCR 텍스트를 바탕으로 내용을 설명하세요.",
+    "ocr": "입력에서 읽힌 텍스트를 정리하고 주요 내용을 요약하세요.",
+}
 
 
 class LLMNodeStrategy(NodeStrategy):
@@ -33,15 +68,20 @@ class LLMNodeStrategy(NodeStrategy):
 
         self._ensure_executable_prompt(node, action, output_data_type, prompt)
 
-        text = await self._resolve_llm_input_text(input_data, service_tokens)
+        requires_content = self._requires_content(runtime_config, action)
+        text = await self._resolve_llm_input_text(
+            input_data,
+            service_tokens,
+            requires_content=requires_content,
+        )
 
         if output_data_type == "SPREADSHEET_DATA":
             result = await self._llm_service.process_json(prompt, context=text)
             return self._to_spreadsheet_payload(result)
 
-        if action == "summarize":
+        if action in {"summarize", "ai_summarize"}:
             result = await self._llm_service.summarize(text)
-        elif action == "classify":
+        elif action in {"classify", "classify_by_content"}:
             categories = runtime_config.get("categories") or self.config.get("categories")
             result = await self._llm_service.classify(text, categories)
         else:  # process, extract, translate, custom
@@ -58,23 +98,57 @@ class LLMNodeStrategy(NodeStrategy):
             return bool(prompt)
         if action in PROMPT_REQUIRED_ACTIONS:
             return bool(prompt)
-        return action in PROMPT_OPTIONAL_ACTIONS
+        return action in PROMPT_OPTIONAL_ACTIONS or action in CONTENT_DEPENDENT_ACTIONS
 
     def _resolve_prompt(self, runtime_config: dict[str, Any]) -> str:
         """runtime_config와 fallback config에서 프롬프트를 조회합니다."""
         prompt = runtime_config.get("prompt") or self.config.get("prompt", "")
-        return str(prompt).strip()
+        prompt = str(prompt).strip()
+        if prompt:
+            return prompt
+        action = runtime_config.get("action") or self.config.get("action", "")
+        return DEFAULT_ACTION_PROMPTS.get(str(action), "")
+
+    def _requires_content(self, runtime_config: dict[str, Any], action: str) -> bool:
+        explicit = runtime_config.get("requires_content")
+        if explicit is None:
+            explicit = runtime_config.get("requiresContent")
+        if explicit is None:
+            explicit = self.config.get("requires_content", self.config.get("requiresContent"))
+        if explicit is not None:
+            return self._coerce_bool(explicit)
+        return action in CONTENT_DEPENDENT_ACTIONS
+
+    @staticmethod
+    def _coerce_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+        return bool(value)
 
     async def _resolve_llm_input_text(
         self,
         input_data: dict | None,
         service_tokens: dict[str, str],
+        requires_content: bool = False,
     ) -> str:
         if not input_data:
             return ""
 
         if input_data.get("type") == "SINGLE_FILE":
-            return await self._resolve_single_file_text(input_data, service_tokens)
+            return await self._resolve_single_file_text(
+                input_data,
+                service_tokens,
+                requires_content=requires_content,
+            )
+
+        if input_data.get("type") == "FILE_LIST":
+            return await self._resolve_file_list_text(
+                input_data,
+                service_tokens,
+                requires_content=requires_content,
+            )
 
         return self._extract_text_from_canonical(input_data)
 
@@ -82,16 +156,25 @@ class LLMNodeStrategy(NodeStrategy):
         self,
         input_data: dict[str, Any],
         service_tokens: dict[str, str],
+        requires_content: bool = False,
     ) -> str:
-        extracted_text = input_data.get("extracted_text")
-        if extracted_text:
-            return self._format_single_file_text(input_data, str(extracted_text))
-
         content = input_data.get("content")
         if content:
             return self._format_single_file_text(input_data, str(content))
 
-        if input_data.get("source_service") == "google_drive" and input_data.get("file_id"):
+        extracted_text = input_data.get("extracted_text")
+        if extracted_text:
+            return self._format_single_file_text(input_data, str(extracted_text))
+
+        content_status = input_data.get("content_status")
+        if requires_content and content_status in CONTENT_FAILURE_STATUSES:
+            self._raise_content_unavailable(input_data, str(content_status))
+
+        if (
+            input_data.get("source_service") == "google_drive"
+            and input_data.get("file_id")
+            and content_status in (None, CONTENT_STATUS_NOT_REQUESTED)
+        ):
             token = service_tokens.get("google_drive", "")
             if token:
                 svc = GoogleDriveService()
@@ -99,15 +182,49 @@ class LLMNodeStrategy(NodeStrategy):
                     token,
                     input_data["file_id"],
                     input_data.get("mime_type", ""),
+                    input_data.get("filename", ""),
+                    input_data.get("size"),
                 )
-                if extraction.get("text"):
-                    return self._format_single_file_text(input_data, extraction["text"])
+                apply_extraction_to_file_payload(input_data, extraction)
+                if input_data.get("content"):
+                    return self._format_single_file_text(input_data, str(input_data["content"]))
+                if requires_content:
+                    self._raise_content_unavailable(
+                        input_data,
+                        str(input_data.get("content_status") or CONTENT_STATUS_FAILED),
+                    )
                 return self._format_single_file_text(
                     input_data,
                     self._format_extraction_failure(extraction),
                 )
 
+        if requires_content:
+            self._raise_content_unavailable(
+                input_data,
+                str(content_status or CONTENT_STATUS_NOT_REQUESTED),
+            )
+
         return self._format_single_file_metadata(input_data)
+
+    async def _resolve_file_list_text(
+        self,
+        input_data: dict[str, Any],
+        service_tokens: dict[str, str],
+        requires_content: bool = False,
+    ) -> str:
+        formatted_items = []
+        for item in input_data.get("items", []):
+            if not isinstance(item, dict):
+                continue
+            item_payload = dict(item)
+            item_payload.setdefault("type", "SINGLE_FILE")
+            await self._resolve_single_file_text(
+                item_payload,
+                service_tokens,
+                requires_content=requires_content,
+            )
+            formatted_items.append(self._format_file_list_item(item_payload))
+        return "\n\n---\n\n".join(formatted_items)
 
     def _ensure_executable_prompt(
         self,
@@ -220,8 +337,8 @@ class LLMNodeStrategy(NodeStrategy):
 
     @staticmethod
     def _format_extraction_failure(extraction: dict[str, Any]) -> str:
-        status = extraction.get("status", "failed")
-        reason = extraction.get("error") or "unsupported"
+        status = extraction.get("content_status") or extraction.get("status", "failed")
+        reason = extraction.get("content_error") or extraction.get("error") or "unsupported"
         return "\n".join(
             [
                 "File content could not be extracted.",
@@ -243,7 +360,38 @@ class LLMNodeStrategy(NodeStrategy):
             parts.append(f"  Modified Time: {item.get('modified_time', '')}")
         if item.get("url"):
             parts.append(f"  Source URL: {item.get('url', '')}")
+        if item.get("content_status"):
+            parts.append(f"  Content Status: {item.get('content_status', '')}")
+        if item.get("content_error"):
+            parts.append(f"  Content Error: {item.get('content_error', '')}")
+        if item.get("content"):
+            parts.append("  Content:")
+            parts.append(str(item.get("content", "")))
         return "\n".join(parts)
+
+    @staticmethod
+    def _raise_content_unavailable(input_data: dict[str, Any], status: str) -> None:
+        if status == CONTENT_STATUS_UNSUPPORTED:
+            code = ErrorCode.DOCUMENT_CONTENT_UNSUPPORTED
+        elif status == CONTENT_STATUS_TOO_LARGE:
+            code = ErrorCode.DOCUMENT_CONTENT_TOO_LARGE
+        elif status == CONTENT_STATUS_EMPTY:
+            code = ErrorCode.DOCUMENT_CONTENT_EMPTY
+        elif status == CONTENT_STATUS_NOT_REQUESTED:
+            code = ErrorCode.DOCUMENT_CONTENT_NOT_REQUESTED
+        else:
+            code = ErrorCode.DOCUMENT_CONTENT_EXTRACTION_FAILED
+
+        error = input_data.get("content_error")
+        raise FlowifyException(
+            code,
+            detail=error or code.message,
+            context={
+                "filename": input_data.get("filename", ""),
+                "content_status": status,
+                "content_error": error,
+            },
+        )
 
     @staticmethod
     def _format_article_item(item: dict[str, Any], index: int) -> str:
