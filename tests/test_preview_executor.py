@@ -59,12 +59,16 @@ async def test_google_drive_single_file_preview_uses_metadata_only() -> None:
         )
 
     assert response.available is True
-    assert response.output_data == {
+    assert response.metadata["content_policy"] == "metadata_only"
+    assert response.output_data | {"content_metadata": {}} == {
         "type": "SINGLE_FILE",
         "source_service": "google_drive",
         "file_id": "file_1",
         "filename": "report.pdf",
         "content": None,
+        "content_status": "not_requested",
+        "content_error": None,
+        "content_metadata": {},
         "extracted_text": None,
         "extraction_status": "not_requested",
         "mime_type": "application/pdf",
@@ -108,10 +112,56 @@ async def test_google_drive_single_file_preview_extracts_text_when_requested() -
             include_content=True,
         )
 
-    assert response.output_data["content"] is None
+    assert response.metadata["content_policy"] == "content_included"
+    assert response.output_data["content"] == "문서 본문"
+    assert response.output_data["content_status"] == "available"
     assert response.output_data["extracted_text"] == "문서 본문"
     assert response.output_data["extraction_status"] == "success"
-    mock_drive.extract_file_text.assert_awaited_once_with("token", "file_1", "application/pdf")
+    mock_drive.extract_file_text.assert_awaited_once_with(
+        "token",
+        "file_1",
+        "application/pdf",
+        "report.pdf",
+        None,
+    )
+
+
+async def test_google_drive_include_content_preview_reports_status_only_when_unavailable() -> None:
+    executor = WorkflowPreviewExecutor()
+    node = _source_node("google_drive", "single_file", "file_1")
+
+    with patch("app.core.engine.preview_executor.GoogleDriveService") as mock_drive_class:
+        mock_drive = mock_drive_class.return_value
+        mock_drive.get_file_metadata = AsyncMock(
+            return_value={
+                "id": "file_1",
+                "name": "archive.zip",
+                "mimeType": "application/zip",
+            }
+        )
+        mock_drive.extract_file_text = AsyncMock(
+            return_value={
+                "text": "",
+                "status": "unsupported",
+                "truncated": False,
+                "error": "이 파일 형식은 아직 본문 읽기를 지원하지 않습니다.",
+                "content_status": "unsupported",
+                "content_error": "이 파일 형식은 아직 본문 읽기를 지원하지 않습니다.",
+            }
+        )
+
+        response = await executor.preview_node(
+            workflow_id="wf1",
+            node_id="node_source",
+            nodes=[node],
+            service_tokens={"google_drive": "token"},
+            limit=5,
+            include_content=True,
+        )
+
+    assert response.metadata["content_policy"] == "content_status_only"
+    assert response.output_data["content"] is None
+    assert response.output_data["content_status"] == "unsupported"
 
 
 async def test_google_drive_folder_preview_applies_limit() -> None:

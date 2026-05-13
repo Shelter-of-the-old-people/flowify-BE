@@ -1,0 +1,206 @@
+{
+  "metadata_only": {
+    "metadata": {
+      "preview_scope": "source_metadata",
+      "content_policy": "metadata_only",
+      "include_content": false
+    },
+    "data": {
+      "type": "SINGLE_FILE",
+      "filename": "report.pdf",
+      "mime_type": "application/pdf",
+      "content": null,
+      "content_status": "not_requested",
+      "content_error": null,
+      "content_metadata": {
+        "extraction_method": "none",
+        "content_kind": "none",
+        "truncated": false,
+        "char_count": 0,
+        "original_char_count": 0,
+        "limits": {
+          "max_download_bytes": 10485760,
+          "max_extracted_chars": 60000,
+          "max_llm_input_chars": 60000
+        }
+      },
+      "extracted_text": null,
+      "extraction_status": "not_requested"
+    }
+  },
+  "content_included": {
+    "metadata": {
+      "preview_scope": "source_metadata",
+      "content_policy": "content_included",
+      "include_content": true
+    },
+    "data": {
+      "type": "SINGLE_FILE",
+      "filename": "report.docx",
+      "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "content": "문서 본문 예시",
+      "content_status": "available",
+      "content_error": null,
+      "content_metadata": {
+        "extraction_method": "docx_xml",
+        "content_kind": "plain_text",
+        "truncated": false,
+        "char_count": 8,
+        "original_char_count": 8,
+        "limits": {
+          "max_download_bytes": 10485760,
+          "max_extracted_chars": 60000,
+          "max_llm_input_chars": 60000
+        }
+      },
+      "extracted_text": "문서 본문 예시",
+      "extraction_status": "success"
+    }
+  },
+  "content_status_only": {
+    "metadata": {
+      "preview_scope": "source_metadata",
+      "content_policy": "content_status_only",
+      "include_content": true
+    },
+    "data": {
+      "type": "SINGLE_FILE",
+      "filename": "archive.zip",
+      "mime_type": "application/zip",
+      "content": null,
+      "content_status": "unsupported",
+      "content_error": "이 파일 형식은 아직 본문 읽기를 지원하지 않습니다.",
+      "content_metadata": {
+        "extraction_method": "none",
+        "content_kind": "none",
+        "truncated": false,
+        "char_count": 0,
+        "original_char_count": 0,
+        "limits": {
+          "max_download_bytes": 10485760,
+          "max_extracted_chars": 60000,
+          "max_llm_input_chars": 60000
+        }
+      },
+      "extracted_text": null,
+      "extraction_status": "unsupported"
+    }
+  },
+  "too_large": {
+    "type": "SINGLE_FILE",
+    "filename": "large.pdf",
+    "mime_type": "application/pdf",
+    "content": null,
+    "content_status": "too_large",
+    "content_error": "파일이 현재 처리 가능한 크기를 초과했습니다.",
+    "content_metadata": {
+      "extraction_method": "none",
+      "content_kind": "none",
+      "truncated": false,
+      "char_count": 0,
+      "original_char_count": 0,
+      "limits": {
+        "max_download_bytes": 10485760,
+        "max_extracted_chars": 60000,
+        "max_llm_input_chars": 60000,
+        "observed_size_bytes": 10485761
+      }
+    },
+    "extracted_text": null,
+    "extraction_status": "failed"
+  },
+  "unsupported": {
+    "type": "SINGLE_FILE",
+    "filename": "image.png",
+    "mime_type": "image/png",
+    "content": null,
+    "content_status": "unsupported",
+    "content_error": "이 파일 형식은 아직 본문 읽기를 지원하지 않습니다.",
+    "content_metadata": {
+      "extraction_method": "none",
+      "content_kind": "none",
+      "truncated": false,
+      "char_count": 0,
+      "original_char_count": 0,
+      "limits": {
+        "max_download_bytes": 10485760,
+        "max_extracted_chars": 60000,
+        "max_llm_input_chars": 60000
+      }
+    },
+    "extracted_text": null,
+    "extraction_status": "unsupported"
+  },
+  "empty": {
+    "type": "SINGLE_FILE",
+    "filename": "blank.txt",
+    "mime_type": "text/plain",
+    "content": null,
+    "content_status": "empty",
+    "content_error": "파일에서 읽을 수 있는 텍스트를 찾지 못했습니다.",
+    "content_metadata": {
+      "extraction_method": "none",
+      "content_kind": "none",
+      "truncated": false,
+      "char_count": 0,
+      "original_char_count": 0,
+      "limits": {
+        "max_download_bytes": 10485760,
+        "max_extracted_chars": 60000,
+        "max_llm_input_chars": 60000
+      }
+    },
+    "extracted_text": null,
+    "extraction_status": "success"
+  },
+  "failed": {
+    "type": "SINGLE_FILE",
+    "filename": "broken.hwpx",
+    "mime_type": "application/vnd.hancom.hwpx",
+    "content": null,
+    "content_status": "failed",
+    "content_error": "파일 본문을 읽는 중 오류가 발생했습니다.",
+    "content_metadata": {
+      "extraction_method": "none",
+      "content_kind": "none",
+      "truncated": false,
+      "char_count": 0,
+      "original_char_count": 0,
+      "limits": {
+        "max_download_bytes": 10485760,
+        "max_extracted_chars": 60000,
+        "max_llm_input_chars": 60000
+      }
+    },
+    "extracted_text": null,
+    "extraction_status": "failed"
+  },
+  "not_requested": {
+    "type": "FILE_LIST",
+    "items": [
+      {
+        "filename": "attachment.pdf",
+        "mime_type": "application/pdf",
+        "source": "gmail",
+        "content": null,
+        "content_status": "not_requested",
+        "content_error": null,
+        "content_metadata": {
+          "extraction_method": "none",
+          "content_kind": "none",
+          "truncated": false,
+          "char_count": 0,
+          "original_char_count": 0,
+          "limits": {
+            "max_download_bytes": 10485760,
+            "max_extracted_chars": 60000,
+            "max_llm_input_chars": 60000
+          }
+        },
+        "extracted_text": null,
+        "extraction_status": "not_requested"
+      }
+    ],
+    "truncated": false
+  }
+}

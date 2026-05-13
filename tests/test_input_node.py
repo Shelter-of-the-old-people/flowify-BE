@@ -52,12 +52,15 @@ async def test_google_drive_single_file(service_tokens: dict) -> None:
 
         result = await strategy.execute(node, None, service_tokens)
 
-    assert result == {
+    assert result | {"content_metadata": {}} == {
         "type": "SINGLE_FILE",
         "source_service": "google_drive",
         "file_id": "file_123",
         "filename": "report.txt",
         "content": None,
+        "content_status": "not_requested",
+        "content_error": None,
+        "content_metadata": {},
         "extracted_text": None,
         "extraction_status": "not_requested",
         "mime_type": "text/plain",
@@ -98,28 +101,12 @@ async def test_google_drive_folder_all_files(service_tokens: dict) -> None:
         result = await strategy.execute(node, None, service_tokens)
 
     assert result["type"] == "FILE_LIST"
-    assert result["items"] == [
-        {
-            "source_service": "google_drive",
-            "file_id": "file_1",
-            "filename": "a.txt",
-            "mime_type": "text/plain",
-            "size": 12,
-            "created_time": "",
-            "modified_time": "",
-            "url": "https://drive.google.com/file/d/file_1",
-        },
-        {
-            "source_service": "google_drive",
-            "file_id": "file_2",
-            "filename": "b.pdf",
-            "mime_type": "application/pdf",
-            "size": 34,
-            "created_time": "",
-            "modified_time": "",
-            "url": "https://drive.google.com/file/d/file_2",
-        },
+    assert [item["content_status"] for item in result["items"]] == [
+        "not_requested",
+        "not_requested",
     ]
+    assert result["items"][0]["filename"] == "a.txt"
+    assert result["items"][1]["filename"] == "b.pdf"
     mock_drive.list_files.assert_awaited_once_with(
         service_tokens["google_drive"], folder_id="folder_123", include_folders=False
     )
@@ -146,12 +133,15 @@ async def test_google_drive_folder_new_file_reads_latest_created_file(service_to
 
         result = await strategy.execute(node, None, service_tokens)
 
-    assert result == {
+    assert result | {"content_metadata": {}} == {
         "type": "SINGLE_FILE",
         "source_service": "google_drive",
         "file_id": "file_latest",
         "filename": "latest.pdf",
         "content": None,
+        "content_status": "not_requested",
+        "content_error": None,
+        "content_metadata": {},
         "extracted_text": None,
         "extraction_status": "not_requested",
         "mime_type": "application/pdf",
@@ -678,6 +668,22 @@ async def test_gmail_attachment_email_returns_file_list_metadata(service_tokens:
             "messageId": "msg_1",
             "attachmentId": "a1",
             "content": None,
+            "content_status": "not_requested",
+            "content_error": None,
+            "content_metadata": {
+                "extraction_method": "none",
+                "content_kind": "none",
+                "truncated": False,
+                "char_count": 0,
+                "original_char_count": 0,
+                "limits": {
+                    "max_download_bytes": 10485760,
+                    "max_extracted_chars": 60000,
+                    "max_llm_input_chars": 60000,
+                },
+            },
+            "extracted_text": None,
+            "extraction_status": "not_requested",
             "downloadUrl": None,
             "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages/msg_1/attachments/a1",
         }

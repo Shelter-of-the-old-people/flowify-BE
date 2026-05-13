@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.common.errors import FlowifyException
+from app.common.errors import ErrorCode, FlowifyException
 from app.core.engine.executor import WorkflowExecutor, register_cancellation_event
 from app.core.engine.state import WorkflowState
 from app.models.workflow import EdgeDefinition, NodeDefinition
@@ -96,6 +96,29 @@ class TestSanitizeForLog:
         data = {"key": "value"}
         result = WorkflowExecutor._sanitize_for_log(data)
         assert result == {"key": "value"}
+
+    def test_truncates_content_and_preserves_content_metadata(self):
+        data = {
+            "type": "SINGLE_FILE",
+            "content": "x" * 4005,
+            "content_metadata": {
+                "extraction_method": "pdf_text",
+                "content_kind": "plain_text",
+                "char_count": 4005,
+                "original_char_count": 4005,
+                "truncated": False,
+            },
+        }
+
+        result = WorkflowExecutor._sanitize_for_log(data)
+
+        assert len(result["content"]) == 4000
+        assert result["content_metadata"]["extraction_method"] == "pdf_text"
+        assert result["content_metadata"]["content_kind"] == "plain_text"
+        assert result["content_metadata"]["stored_content_truncated"] is True
+        assert result["content_metadata"]["stored_char_count"] == 4000
+        assert result["content_metadata"]["truncated_for_log"] is True
+        assert "limits" in result["content_metadata"]
 
 
 def _mock_factory(side_effect=None, return_value=None):
@@ -917,6 +940,64 @@ class TestLoopExecution:
         body_log = next(log for log in result.nodeLogs if log.nodeId == "node_3")
         assert body_log.status == "failed"
         assert "iteration 0" in body_log.error.message
+
+    @pytest.mark.asyncio
+    async def test_loop_body_flowify_exception_preserves_original_context(self, mock_db):
+        """Loop body의 문서 본문 오류 context를 nodeLogs[].error.context에 보존합니다."""
+        executor = WorkflowExecutor(mock_db)
+
+        async def side_effect(node, input_data, service_tokens):
+            node_type = node.get("type", "")
+            if node_type == "input":
+                return {
+                    "type": "FILE_LIST",
+                    "items": [
+                        {
+                            "file_id": "f1",
+                            "filename": "archive.zip",
+                            "content_status": "unsupported",
+                        }
+                    ],
+                }
+            if node_type == "loop":
+                return input_data
+            if node_type == "llm":
+                raise FlowifyException(
+                    ErrorCode.DOCUMENT_CONTENT_UNSUPPORTED,
+                    detail="이 파일 형식은 아직 본문 읽기를 지원하지 않습니다.",
+                    context={
+                        "filename": input_data.get("filename"),
+                        "content_status": input_data.get("content_status"),
+                        "content_error": "이 파일 형식은 아직 본문 읽기를 지원하지 않습니다.",
+                    },
+                )
+            return {"type": "TEXT", "content": "ok"}
+
+        executor._factory = _mock_factory(side_effect=side_effect)
+
+        nodes = [
+            NodeDefinition(id="node_1", type="input", config={}),
+            self._make_loop_node("node_2"),
+            NodeDefinition(id="node_3", type="llm", config={}),
+        ]
+        edges = _make_edges(("node_1", "node_2"), ("node_2", "node_3"))
+
+        result = await executor.execute(
+            execution_id="exec_loop_document_context",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=nodes,
+            edges=edges,
+            service_tokens={},
+        )
+
+        body_log = next(log for log in result.nodeLogs if log.nodeId == "node_3")
+        assert body_log.status == "failed"
+        assert body_log.error.code == "DOCUMENT_CONTENT_UNSUPPORTED"
+        assert body_log.error.context["filename"] == "archive.zip"
+        assert body_log.error.context["content_status"] == "unsupported"
+        assert body_log.error.context["iteration"] == 0
+        assert body_log.error.context["body_node_id"] == "node_3"
 
     @pytest.mark.asyncio
     async def test_body_node_not_re_executed_in_topological_order(self, mock_db):

@@ -10,6 +10,7 @@ import uuid
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.common.errors import ErrorCode, FlowifyException
+from app.core.document_content import truncate_content_for_log
 from app.config import settings
 from app.core.engine.snapshot import SnapshotManager
 from app.core.engine.state import WorkflowState, WorkflowStateManager
@@ -356,6 +357,7 @@ class WorkflowExecutor:
                 error=ErrorDetail(
                     code=e.error_code.name,
                     message=e.detail,
+                    context=e.context,
                     stackTrace=traceback.format_exc() if settings.APP_DEBUG else None,
                 ),
                 startedAt=started_at,
@@ -445,7 +447,7 @@ class WorkflowExecutor:
             return {}
         cleaned = copy.deepcopy(data)
         cleaned.pop("credentials", None)
-        return cleaned
+        return truncate_content_for_log(cleaned)
 
     @staticmethod
     def _get_predecessors(node_id: str, edges: list[EdgeDefinition]) -> list[str]:
@@ -885,7 +887,11 @@ class WorkflowExecutor:
                     error=ErrorDetail(
                         code=e.error_code.name,
                         message=e.detail,
-                        context={"iteration": idx},
+                        context={
+                            **e.context,
+                            "iteration": idx,
+                            "body_node_id": body_node_def.id,
+                        },
                     ),
                     startedAt=started_at,
                     finishedAt=datetime.now(UTC),
@@ -906,7 +912,11 @@ class WorkflowExecutor:
                     error=ErrorDetail(
                         code=e.error_code.name,
                         message=f"Loop body failed at iteration {idx}: {e.detail}",
-                        context={"iteration": idx, "body_node_id": body_node_def.id},
+                        context={
+                            **e.context,
+                            "iteration": idx,
+                            "body_node_id": body_node_def.id,
+                        },
                     ),
                     startedAt=started_at,
                     finishedAt=datetime.now(UTC),
@@ -942,6 +952,7 @@ class WorkflowExecutor:
                 error=ErrorDetail(
                     code=e.error_code.name,
                     message=e.detail,
+                    context=e.context,
                 ),
                 startedAt=started_at,
                 finishedAt=datetime.now(UTC),

@@ -2,6 +2,7 @@ import base64
 from email.message import EmailMessage
 from email.utils import getaddresses, parsedate_to_datetime
 
+from app.core.document_content import default_file_content_fields
 from app.services.integrations.base import BaseIntegrationService
 
 GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"
@@ -168,22 +169,22 @@ class GmailService(BaseIntegrationService):
                     if attachment_id
                     else ""
                 )
-                attachments.append(
-                    {
-                        "id": f"gmail-{message_id}:{attachment_key}",
-                        "name": filename,
-                        "filename": filename,
-                        "mimeType": part.get("mimeType", ""),
-                        "mime_type": part.get("mimeType", ""),
-                        "size": body.get("size"),
-                        "source": "gmail",
-                        "messageId": message_id,
-                        "attachmentId": attachment_id or "",
-                        "content": None,
-                        "downloadUrl": None,
-                        "url": url,
-                    }
-                )
+                attachment_payload = {
+                    "id": f"gmail-{message_id}:{attachment_key}",
+                    "name": filename,
+                    "filename": filename,
+                    "mimeType": part.get("mimeType", ""),
+                    "mime_type": part.get("mimeType", ""),
+                    "size": body.get("size"),
+                    "source": "gmail",
+                    "messageId": message_id,
+                    "attachmentId": attachment_id or "",
+                    "content": None,
+                    "downloadUrl": None,
+                    "url": url,
+                }
+                attachment_payload.update(default_file_content_fields())
+                attachments.append(attachment_payload)
             attachments.extend(GmailService._extract_attachments(part, message_id))
 
         return attachments

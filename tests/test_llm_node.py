@@ -1,4 +1,6 @@
+import io
 from unittest.mock import AsyncMock, patch
+from zipfile import ZipFile
 
 import pytest
 
@@ -19,6 +21,15 @@ def _node(**overrides):
     if "action" in overrides and "runtime_config" not in overrides:
         n["runtime_config"] = {"action": overrides.pop("action")}
     return n
+
+
+def _zip_bytes(entries: dict[str, str | bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with ZipFile(buffer, "w") as archive:
+        for name, content in entries.items():
+            raw = content.encode() if isinstance(content, str) else content
+            archive.writestr(name, raw)
+    return buffer.getvalue()
 
 
 # ── execute (action routing) ──
@@ -390,6 +401,8 @@ async def test_extract_text_from_google_drive_file_uses_lazy_extraction():
         "token",
         "file_latest",
         "application/pdf",
+        "latest.pdf",
+        None,
     )
 
 
@@ -415,23 +428,108 @@ async def test_extract_text_from_google_drive_file_uses_failure_message():
         node = LLMNodeStrategy(config={"action": "summarize"})
         node._llm_service = mock_instance
 
+        with pytest.raises(FlowifyException) as exc_info:
+            await node.execute(
+                node=_node(runtime_config={"action": "summarize"}),
+                input_data={
+                    "type": "SINGLE_FILE",
+                    "source_service": "google_drive",
+                    "file_id": "file_latest",
+                    "filename": "latest.bin",
+                    "mime_type": "application/octet-stream",
+                    "content": None,
+                },
+                service_tokens={"google_drive": "token"},
+            )
+
+    assert exc_info.value.error_code == ErrorCode.DOCUMENT_CONTENT_UNSUPPORTED
+
+
+@pytest.mark.parametrize(
+    ("filename", "mime_type", "archive_entries", "expected_text"),
+    [
+        (
+            "report.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            {
+                "word/document.xml": """
+                    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                      <w:body><w:p><w:r><w:t>DOCX 본문</w:t></w:r></w:p></w:body>
+                    </w:document>
+                """,
+            },
+            "DOCX 본문",
+        ),
+        (
+            "deck.pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            {
+                "ppt/slides/slide1.xml": """
+                    <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                           xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                      <p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>PPTX 본문</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>
+                    </p:sld>
+                """,
+            },
+            "PPTX 본문",
+        ),
+        (
+            "contract.hwpx",
+            "application/vnd.hancom.hwpx",
+            {
+                "Contents/section0.xml": """
+                    <hp:section xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                      <hp:p><hp:run><hp:t>HWPX 본문</hp:t></hp:run></hp:p>
+                    </hp:section>
+                """,
+            },
+            "HWPX 본문",
+        ),
+    ],
+)
+async def test_google_drive_document_extractors_feed_single_file_llm_summarize(
+    filename: str,
+    mime_type: str,
+    archive_entries: dict[str, str | bytes],
+    expected_text: str,
+):
+    from app.services.integrations.google_drive import GoogleDriveService
+
+    drive_service = GoogleDriveService()
+    with (
+        patch.object(
+            drive_service,
+            "download_file_bytes",
+            new_callable=AsyncMock,
+            return_value=_zip_bytes(archive_entries),
+        ),
+        patch("app.core.nodes.llm_node.GoogleDriveService", return_value=drive_service),
+        patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls,
+    ):
+        mock_instance = mock_svc_cls.return_value
+        mock_instance.summarize = AsyncMock(return_value="요약")
+
+        from app.core.nodes.llm_node import LLMNodeStrategy
+
+        node = LLMNodeStrategy(config={"action": "summarize"})
+        node._llm_service = mock_instance
+
         await node.execute(
             node=_node(runtime_config={"action": "summarize"}),
             input_data={
                 "type": "SINGLE_FILE",
                 "source_service": "google_drive",
-                "file_id": "file_latest",
-                "filename": "latest.bin",
-                "mime_type": "application/octet-stream",
+                "file_id": "file_document",
+                "filename": filename,
+                "mime_type": mime_type,
                 "content": None,
             },
             service_tokens={"google_drive": "token"},
         )
 
     call_args = mock_instance.summarize.call_args[0][0]
-    assert "File content could not be extracted." in call_args
-    assert "Status: unsupported" in call_args
-    assert "%PDF" not in call_args
+    assert f"Filename: {filename}" in call_args
+    assert expected_text in call_args
 
 
 async def test_extract_text_from_file_list_includes_metadata():
@@ -455,6 +553,8 @@ async def test_extract_text_from_file_list_includes_metadata():
                         "size": 128,
                         "created_time": "2026-05-04T12:00:00Z",
                         "url": "https://drive.google.com/file/d/file_latest",
+                        "content": "파일 본문",
+                        "content_status": "available",
                     }
                 ],
             },
@@ -465,6 +565,7 @@ async def test_extract_text_from_file_list_includes_metadata():
     assert "- Filename: latest.pdf" in call_args
     assert "MIME Type: application/pdf" in call_args
     assert "Source URL: https://drive.google.com/file/d/file_latest" in call_args
+    assert "파일 본문" in call_args
 
 
 # ── validate ──

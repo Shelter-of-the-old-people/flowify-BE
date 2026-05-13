@@ -7,6 +7,11 @@ logs or calling output-node write operations.
 from typing import Any
 
 from app.common.errors import ErrorCode, FlowifyException
+from app.core.document_content import (
+    CONTENT_STATUS_AVAILABLE,
+    apply_extraction_to_file_payload,
+    ensure_file_content_fields,
+)
 from app.core.nodes.google_sheets_common import (
     build_sheet_range,
     coerce_int,
@@ -58,6 +63,10 @@ class WorkflowPreviewExecutor:
                     "limit": limit,
                     "include_content": include_content,
                     "preview_scope": "source_metadata",
+                    "content_policy": self._resolve_preview_content_policy(
+                        preview_data,
+                        include_content,
+                    ),
                 },
             )
 
@@ -67,7 +76,10 @@ class WorkflowPreviewExecutor:
             status="unavailable",
             available=False,
             reason="PREVIEW_NOT_IMPLEMENTED",
-            metadata={"preview_scope": "source_metadata"},
+            metadata={
+                "preview_scope": "source_metadata",
+                "content_policy": "metadata_only",
+            },
         )
 
     async def _preview_source_node(
@@ -472,12 +484,11 @@ class WorkflowPreviewExecutor:
         include_content: bool,
     ) -> dict[str, Any]:
         file_id = file_data.get("id", "")
-        result = {
+        result = ensure_file_content_fields({
             "type": "SINGLE_FILE",
             "source_service": "google_drive",
             "file_id": file_id,
             "filename": file_data.get("name", ""),
-            "content": None,
             "extracted_text": file_data.get("extracted_text") if include_content else None,
             "extraction_status": file_data.get("extraction_status", "not_requested"),
             "mime_type": file_data.get("mimeType", ""),
@@ -485,13 +496,13 @@ class WorkflowPreviewExecutor:
             "created_time": file_data.get("createdTime", ""),
             "modified_time": file_data.get("modifiedTime", ""),
             "url": file_data.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}",
-        }
+        })
         return result
 
     @staticmethod
     def _to_drive_file_item(file_data: dict[str, Any]) -> dict[str, Any]:
         file_id = file_data.get("id", "")
-        return {
+        return ensure_file_content_fields({
             "source_service": "google_drive",
             "file_id": file_id,
             "filename": file_data.get("name", ""),
@@ -500,24 +511,21 @@ class WorkflowPreviewExecutor:
             "created_time": file_data.get("createdTime", ""),
             "modified_time": file_data.get("modifiedTime", ""),
             "url": file_data.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}",
-        }
+        })
 
     @staticmethod
     def _empty_single_file() -> dict[str, Any]:
-        return {
+        return ensure_file_content_fields({
             "type": "SINGLE_FILE",
             "source_service": "google_drive",
             "file_id": "",
             "filename": "",
-            "content": None,
-            "extracted_text": None,
-            "extraction_status": "not_requested",
             "mime_type": "",
             "size": None,
             "url": "",
             "created_time": "",
             "modified_time": "",
-        }
+        })
 
     @staticmethod
     async def _attach_drive_text_preview(
@@ -529,12 +537,47 @@ class WorkflowPreviewExecutor:
             token,
             payload.get("file_id", ""),
             payload.get("mime_type", ""),
+            payload.get("filename", ""),
+            payload.get("size"),
         )
-        payload["extracted_text"] = extraction.get("text") or None
-        payload["extraction_status"] = extraction.get("status", "failed")
+        apply_extraction_to_file_payload(payload, extraction)
         payload["truncated"] = extraction.get("truncated", False)
-        if extraction.get("error"):
-            payload["extraction_error"] = extraction["error"]
+
+    @staticmethod
+    def _resolve_preview_content_policy(preview_data: Any, include_content: bool) -> str:
+        if not include_content:
+            return "metadata_only"
+        if WorkflowPreviewExecutor._has_included_content(preview_data):
+            return "content_included"
+        if WorkflowPreviewExecutor._has_content_status(preview_data):
+            return "content_status_only"
+        return "metadata_only"
+
+    @staticmethod
+    def _has_included_content(value: Any) -> bool:
+        if isinstance(value, list):
+            return any(WorkflowPreviewExecutor._has_included_content(item) for item in value)
+        if not isinstance(value, dict):
+            return False
+        content_status = value.get("content_status")
+        content = value.get("content")
+        if content_status == CONTENT_STATUS_AVAILABLE:
+            return True
+        if isinstance(content, str) and bool(content.strip()):
+            return True
+        return any(
+            WorkflowPreviewExecutor._has_included_content(item) for item in value.values()
+        )
+
+    @staticmethod
+    def _has_content_status(value: Any) -> bool:
+        if isinstance(value, list):
+            return any(WorkflowPreviewExecutor._has_content_status(item) for item in value)
+        if not isinstance(value, dict):
+            return False
+        if "content_status" in value:
+            return True
+        return any(WorkflowPreviewExecutor._has_content_status(item) for item in value.values())
 
     @staticmethod
     def _to_single_email(msg: dict[str, Any], include_content: bool) -> dict[str, Any]:
@@ -584,8 +627,9 @@ class WorkflowPreviewExecutor:
 
     @staticmethod
     def _to_file_items(attachments: list[dict]) -> list[dict[str, Any]]:
-        return [
-            {
+        items = []
+        for attachment in attachments:
+            item = {
                 "id": attachment.get("id", ""),
                 "name": attachment.get("name", attachment.get("filename", "")),
                 "filename": attachment.get("filename", ""),
@@ -599,8 +643,8 @@ class WorkflowPreviewExecutor:
                 "downloadUrl": attachment.get("downloadUrl"),
                 "url": attachment.get("url", ""),
             }
-            for attachment in attachments
-        ]
+            items.append(ensure_file_content_fields(item))
+        return items
 
     @staticmethod
     def _normalize_email_recipients(raw_value: Any) -> list[str]:
