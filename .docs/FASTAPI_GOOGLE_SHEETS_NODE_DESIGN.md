@@ -160,6 +160,35 @@ Mongo-safe 상태 규칙:
 - 이메일처럼 `.`가 들어간 키는 그대로 Mongo map key로 저장하면 안 된다.
 - 저장 전 escape하고, 읽을 때 다시 복원해야 한다.
 
+### 5.4 시작 노드 source preview
+
+Google Sheets 시작 노드는 실행 전 preview도 지원해야 한다.
+
+preview 목표:
+
+- 사용자가 어떤 헤더와 행이 들어오는지 실행 전에 확인한다.
+- preview는 실제 실행 기록이나 `node_state_update`를 만들지 않는다.
+- preview 결과는 기존 실행 payload와 같은 `SPREADSHEET_DATA` 계열을 유지한다.
+
+모드별 preview 규칙:
+
+- `sheet_all`
+  - 현재 시트에서 앞쪽 `limit`행 sample을 반환한다.
+- `new_row`
+  - event source의 성격을 보여주기 위해 현재 시트의 최근 `limit`행 sample을 반환한다.
+  - preview에서는 첫 실행 `skip_existing` 상태를 commit하거나 변경하지 않는다.
+- `row_updated`
+  - `key_column` 검증은 그대로 수행한다.
+  - preview에서는 실제 diff commit 대신 현재 시트의 최근 `limit`행 sample을 반환한다.
+
+preview payload 규칙:
+
+- `headers`는 현재 헤더를 그대로 반환한다.
+- `rows`는 sample 행만 반환한다.
+- `metadata.total_rows`로 실제 전체 행 수를 함께 반환한다.
+- `metadata.truncated`와 top-level `truncated`로 sample 생략 여부를 표시한다.
+- `metadata.sample_strategy`로 `head`/`tail` sample 방식을 구분한다.
+
 ---
 
 ## 6. 중간 노드 동작
@@ -364,6 +393,22 @@ FastAPI 런타임은 Google Sheets 중간 노드 기능을 계속 지원한다.
 따라서 이번 이슈에서는 런타임 지원을 유지하되, 기능 노출은 보류 상태로 두고 문서에만 향후 보완점으로 남긴다.
 
 향후 FE 에디터에서 중간 노드 타입 확장이 열리면, FastAPI의 현재 중간 노드 실행 경로를 그대로 연결해 재사용한다.
+
+또한 현재 시작 노드의 `new_row`, `row_updated`는 Google Sheets 변경을 외부 push event로 즉시 받는 구조가 아니라, 워크플로우 실행 시점에 시트를 다시 읽고 durable state와 비교하는 polling 기반 감지로 동작한다.
+
+이번 이슈 범위에서는 자동화 요구를 충족하지만, 향후 "시트가 바뀌면 즉시 실행"에 가까운 제품 요구가 생기면 별도 watch 등록, event ingestion, 기준점 갱신 규칙을 포함한 실시간 감지 설계를 추가해야 한다.
+
+끝 노드도 현재는 실제 쓰기 전 결과를 계산만 해보는 dry-run preview를 제공하지 않는다.
+
+향후 보완 시에는 아래 정보를 실제 write 없이 계산해서 preview payload로 내려줄 수 있어야 한다.
+
+- 대상 `spreadsheet_id`와 `sheet_name`
+- 적용될 `write_mode`
+- sample 기준으로 실제로 써질 row
+- `update`/`upsert`일 때 key 기준 insert/update 예상 요약
+- `overwrite_range`일 때 영향 범위 요약
+
+이 기능은 실행 로직을 재사용하되, 외부 시트에 commit하지 않는 no-write preview 경로로 분리하는 것이 안전하다.
 
 ## 12. 결정 요약
 

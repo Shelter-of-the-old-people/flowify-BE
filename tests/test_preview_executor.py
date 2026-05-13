@@ -2,6 +2,9 @@
 
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
+from app.common.errors import ErrorCode, FlowifyException
 from app.core.engine.preview_executor import WorkflowPreviewExecutor
 from app.models.workflow import NodeDefinition
 
@@ -144,6 +147,135 @@ async def test_google_drive_folder_preview_applies_limit() -> None:
         max_results=2,
         include_folders=False,
     )
+
+
+async def test_google_sheets_sheet_all_preview_returns_head_sample() -> None:
+    executor = WorkflowPreviewExecutor()
+    node = _source_node(
+        "google_sheets",
+        "sheet_all",
+        "sheet_123",
+        config={"sheet_name": "Responses"},
+    )
+
+    with patch("app.core.engine.preview_executor.GoogleSheetsService") as mock_sheets_class:
+        mock_sheets = mock_sheets_class.return_value
+        mock_sheets.read_range = AsyncMock(
+            return_value=[
+                ["id", "status"],
+                ["a", "open"],
+                ["b", "done"],
+                ["c", "new"],
+            ]
+        )
+
+        response = await executor.preview_node(
+            workflow_id="wf1",
+            node_id="node_source",
+            nodes=[node],
+            service_tokens={"google_sheets": "token"},
+            limit=2,
+            include_content=False,
+        )
+
+    assert response.available is True
+    assert response.output_data == {
+        "type": "SPREADSHEET_DATA",
+        "spreadsheet_id": "sheet_123",
+        "sheet_name": "Responses",
+        "headers": ["id", "status"],
+        "rows": [["a", "open"], ["b", "done"]],
+        "metadata": {
+            "mode": "sheet_all",
+            "sourceMode": "sheet_all",
+            "row_count": 2,
+            "total_rows": 3,
+            "truncated": True,
+            "sample_strategy": "head",
+        },
+        "truncated": True,
+    }
+    mock_sheets.read_range.assert_awaited_once_with("token", "sheet_123", "Responses")
+
+
+async def test_google_sheets_new_row_preview_returns_latest_rows_sample() -> None:
+    executor = WorkflowPreviewExecutor()
+    node = _source_node(
+        "google_sheets",
+        "new_row",
+        "sheet_123",
+        config={"sheet_name": "Responses", "initial_sync_mode": "skip_existing"},
+    )
+
+    with patch("app.core.engine.preview_executor.GoogleSheetsService") as mock_sheets_class:
+        mock_sheets = mock_sheets_class.return_value
+        mock_sheets.read_range = AsyncMock(
+            return_value=[
+                ["id", "status"],
+                ["a", "open"],
+                ["b", "done"],
+                ["c", "new"],
+            ]
+        )
+
+        response = await executor.preview_node(
+            workflow_id="wf1",
+            node_id="node_source",
+            nodes=[node],
+            service_tokens={"google_sheets": "token"},
+            limit=2,
+            include_content=False,
+        )
+
+    assert response.available is True
+    assert response.output_data == {
+        "type": "SPREADSHEET_DATA",
+        "spreadsheet_id": "sheet_123",
+        "sheet_name": "Responses",
+        "headers": ["id", "status"],
+        "rows": [["b", "done"], ["c", "new"]],
+        "metadata": {
+            "mode": "new_row",
+            "sourceMode": "new_row",
+            "row_count": 2,
+            "total_rows": 3,
+            "truncated": True,
+            "sample_strategy": "tail",
+        },
+        "truncated": True,
+    }
+
+
+async def test_google_sheets_row_updated_preview_requires_key_column() -> None:
+    executor = WorkflowPreviewExecutor()
+    node = _source_node(
+        "google_sheets",
+        "row_updated",
+        "sheet_123",
+        config={"sheet_name": "Responses"},
+    )
+
+    with patch("app.core.engine.preview_executor.GoogleSheetsService") as mock_sheets_class:
+        mock_sheets = mock_sheets_class.return_value
+        mock_sheets.read_range = AsyncMock(
+            return_value=[
+                ["id", "status"],
+                ["a", "open"],
+            ]
+        )
+
+        with pytest.raises(FlowifyException) as exc_info:
+            await executor.preview_node(
+                workflow_id="wf1",
+                node_id="node_source",
+                nodes=[node],
+                service_tokens={"google_sheets": "token"},
+                limit=2,
+                include_content=False,
+            )
+
+    assert exc_info.value.error_code == ErrorCode.INVALID_REQUEST
+    assert exc_info.value.detail == "Google Sheets row_updated preview requires key_column."
 
 
 async def test_middle_node_preview_is_not_implemented_yet() -> None:
