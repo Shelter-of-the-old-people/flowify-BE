@@ -67,7 +67,7 @@ python -m pytest -q → 188 passed in 15.70s
 | 10 | body 없이 롤백 (성공 노드 없는 경우) | ✅ 400 | `ROLLBACK_UNAVAILABLE` — 모든 노드 실패 |
 | 13 | body 없이 롤백 (성공 노드 있는 경우) | ✅ 200 | 자동으로 `node_1` 선택, 상태 `pending` 전환 |
 | 14a | 명시 `node_id`로 성공 노드 롤백 | ✅ 200 | `node_a`로 정상 롤백 |
-| 14c | 명시 `node_id`로 skipped 노드(스냅샷 ��음) 롤백 | ✅ 400 | `ROLLBACK_UNAVAILABLE` — 근거 없는 노드 거부 |
+| 14c | 명시 `node_id`로 skipped 노드(스냅샷 없음) 롤백 | ✅ 400 | `ROLLBACK_UNAVAILABLE` — 근거 없는 노드 거부 |
 | 14d | 명시 `node_id`로 실패 노드(스냅샷 있음) 롤백 | ✅ 200 | `node_b` 스냅샷 존재하므로 허용 |
 | 25 | `success` 상태에서 롤백 시도 | ✅ 400 | 상태 제한 정상 작동 |
 | 26 | `pending` 상태에서 롤백 시도 | ✅ 400 | 상태 제한 정상 작동 |

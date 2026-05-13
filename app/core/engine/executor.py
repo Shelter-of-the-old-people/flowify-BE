@@ -106,6 +106,7 @@ class WorkflowExecutor:
         skipped_nodes: set[str] = set()
         handled_nodes: set[str] = set()
         pending_source_commits: list[SourceCheckpointCommit] = []
+        node_state_updates: list[dict[str, Any]] = []
 
         try:
             for node_id in execution_order:
@@ -127,7 +128,7 @@ class WorkflowExecutor:
                     execution.state = WorkflowState.STOPPED
                     execution.errorMessage = "Execution stopped by user request"
                     execution.finishedAt = datetime.now(UTC)
-                    await self._finalize_execution(execution_id, execution)
+                    await self._finalize_execution(execution_id, execution, node_state_updates)
                     return execution
 
                 if node_id in skipped_nodes or node_id in handled_nodes:
@@ -152,9 +153,11 @@ class WorkflowExecutor:
                     edge_outputs,
                 )
 
-                node_log = await self._execute_node(
+                node_log, state_update = await self._execute_node(
                     node_def, input_data, service_tokens, snapshot_manager
                 )
+                if state_update:
+                    node_state_updates.append(state_update)
 
                 if node_log.status == "failed":
                     execution.nodeLogs.append(node_log)
@@ -178,7 +181,7 @@ class WorkflowExecutor:
                         node_log.error.message if node_log.error else "노드 실행 실패"
                     )
                     execution.finishedAt = datetime.now(UTC)
-                    await self._finalize_execution(execution_id, execution)
+                    await self._finalize_execution(execution_id, execution, node_state_updates)
                     return execution
 
                 freshness_decision = await self._source_freshness_service.filter_output(
@@ -247,7 +250,7 @@ class WorkflowExecutor:
                             else "Loop body execution failed"
                         )
                         execution.finishedAt = datetime.now(UTC)
-                        await self._finalize_execution(execution_id, execution)
+                        await self._finalize_execution(execution_id, execution, node_state_updates)
                         return execution
 
                     node_outputs[body_node_id] = aggregate_log.outputData or {}
@@ -286,7 +289,14 @@ class WorkflowExecutor:
             execution.finishedAt = datetime.now(UTC)
             await self._save_execution(execution_id, execution)
             await self._source_freshness_service.commit_pending(pending_source_commits)
-            await self._callback_service.notify_execution_complete(execution_id, execution)
+            if node_state_updates:
+                await self._callback_service.notify_execution_complete(
+                    execution_id,
+                    execution,
+                    node_state_updates=node_state_updates,
+                )
+            else:
+                await self._callback_service.notify_execution_complete(execution_id, execution)
             return execution
 
         finally:
@@ -298,7 +308,7 @@ class WorkflowExecutor:
         input_data: dict[str, Any] | None,
         service_tokens: dict[str, str],
         snapshot_manager: SnapshotManager,
-    ) -> NodeExecutionLog:
+    ) -> tuple[NodeExecutionLog, dict[str, Any] | None]:
         """단일 노드 실행. 스냅샷 저장, 타이밍 측정, 에러 캐치."""
         started_at = datetime.now(UTC)
 
@@ -317,6 +327,9 @@ class WorkflowExecutor:
                 input_data=input_data,
                 service_tokens=service_tokens,
             )
+            node_state_update = None
+            if isinstance(output_data, dict):
+                node_state_update = self._extract_node_state_update(node_def.id, output_data)
 
             return NodeExecutionLog(
                 nodeId=node_def.id,
@@ -329,7 +342,7 @@ class WorkflowExecutor:
                 ),
                 startedAt=started_at,
                 finishedAt=datetime.now(UTC),
-            )
+            ), node_state_update
 
         except FlowifyException as e:
             return NodeExecutionLog(
@@ -347,7 +360,7 @@ class WorkflowExecutor:
                 ),
                 startedAt=started_at,
                 finishedAt=datetime.now(UTC),
-            )
+            ), None
 
         except Exception as e:
             return NodeExecutionLog(
@@ -365,7 +378,7 @@ class WorkflowExecutor:
                 ),
                 startedAt=started_at,
                 finishedAt=datetime.now(UTC),
-            )
+            ), None
 
     async def _save_execution(self, execution_id: str, execution: WorkflowExecution) -> None:
         """실행 상태를 MongoDB에 upsert합니다."""
@@ -389,10 +402,41 @@ class WorkflowExecutor:
                 upsert=True,
             )
 
-    async def _finalize_execution(self, execution_id: str, execution: WorkflowExecution) -> None:
+    async def _finalize_execution(
+        self,
+        execution_id: str,
+        execution: WorkflowExecution,
+        node_state_updates: list[dict[str, Any]] | None = None,
+    ) -> None:
         """종료 상태를 저장하고 Spring 완료 콜백을 전송합니다."""
         await self._save_execution(execution_id, execution)
-        await self._callback_service.notify_execution_complete(execution_id, execution)
+        if node_state_updates:
+            await self._callback_service.notify_execution_complete(
+                execution_id,
+                execution,
+                node_state_updates=node_state_updates,
+            )
+        else:
+            await self._callback_service.notify_execution_complete(execution_id, execution)
+
+    @staticmethod
+    def _extract_node_state_update(
+        node_id: str,
+        output_data: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        raw_update = output_data.pop("node_state_update", None)
+        if not isinstance(raw_update, dict):
+            return None
+
+        state = raw_update.get("state")
+        if not isinstance(state, dict):
+            return None
+
+        return {
+            "nodeId": node_id,
+            "service": raw_update.get("service"),
+            "state": state,
+        }
 
     @staticmethod
     def _sanitize_for_log(data: dict | None) -> dict:

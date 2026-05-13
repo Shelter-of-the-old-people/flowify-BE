@@ -14,6 +14,8 @@ class RuntimeSource(BaseModel):
     mode: str
     target: str = ""
     canonical_input_type: str = ""
+    config: dict[str, Any] = Field(default_factory=dict)
+    state: dict[str, Any] | None = None
 
 
 class RuntimeSink(BaseModel):
@@ -21,6 +23,15 @@ class RuntimeSink(BaseModel):
 
     service: str
     config: dict[str, Any] = Field(default_factory=dict)
+
+
+class RuntimeAction(BaseModel):
+    """Integration node runtime action metadata."""
+
+    service: str
+    action: str
+    config: dict[str, Any] = Field(default_factory=dict)
+    state: dict[str, Any] | None = None
 
 
 class RuntimeConfig(BaseModel):
@@ -60,6 +71,7 @@ class NodeDefinition(BaseModel):
     runtime_type: str | None = Field(default=None, alias="runtime_type")
     runtime_source: RuntimeSource | None = Field(default=None, alias="runtime_source")
     runtime_sink: RuntimeSink | None = Field(default=None, alias="runtime_sink")
+    runtime_action: RuntimeAction | None = Field(default=None, alias="runtime_action")
     runtime_config: RuntimeConfig | None = Field(default=None, alias="runtime_config")
 
 

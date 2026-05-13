@@ -153,3 +153,30 @@ class TestSpringExecutionCallbackService:
             await service.notify_execution_complete("exec_2", execution)
 
         mock_client.request.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_build_payload_includes_node_state_updates(self):
+        service = SpringExecutionCallbackService()
+        execution = _make_execution(
+            WorkflowState.SUCCESS,
+            output_data={"type": "TEXT", "content": "ok"},
+        )
+
+        payload = service._build_payload(
+            execution,
+            node_state_updates=[
+                {
+                    "nodeId": "node_sheet",
+                    "service": "google_sheets",
+                    "state": {"last_seen_row_index": 10},
+                }
+            ],
+        )
+
+        assert payload["nodeStateUpdates"] == [
+            {
+                "nodeId": "node_sheet",
+                "service": "google_sheets",
+                "state": {"last_seen_row_index": 10},
+            }
+        ]

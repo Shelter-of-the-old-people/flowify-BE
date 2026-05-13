@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 from app.core.nodes.data_filter_node import DataFilterNodeStrategy
 from app.core.nodes.factory import NodeFactory, resolve_strategy_key
+from app.core.nodes.integration_node import IntegrationNodeStrategy
 from app.core.nodes.input_node import InputNodeStrategy
 from app.core.nodes.llm_node import LLMNodeStrategy
 from app.core.nodes.passthrough_node import PassthroughNodeStrategy
@@ -77,3 +78,18 @@ def test_factory_keeps_runtime_type_primary_for_non_llm_nodes():
 
     assert isinstance(strategy, InputNodeStrategy)
     assert resolve_strategy_key(node_def) == "input"
+
+
+def test_factory_routes_integration_runtime_type_to_integration_strategy():
+    node_def = NodeDefinition(
+        id="node_sheets_mid",
+        type="google_sheets",
+        config={"service": "google_sheets", "action": "search_text"},
+        runtime_type="integration",
+        runtime_action={"service": "google_sheets", "action": "search_text"},
+    )
+
+    strategy = NodeFactory.create_from_node_def(node_def)
+
+    assert isinstance(strategy, IntegrationNodeStrategy)
+    assert resolve_strategy_key(node_def) == "integration"

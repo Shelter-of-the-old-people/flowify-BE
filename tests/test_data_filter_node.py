@@ -61,6 +61,105 @@ async def test_data_filter_single_file_metadata_to_text():
     )
 
 
+async def test_data_filter_single_email_fields_to_spreadsheet_with_aliases():
+    strategy = DataFilterNodeStrategy()
+
+    result = await strategy.execute(
+        node=_node(
+            {
+                "choiceActionId": "filter_fields_table",
+                "choiceSelections": {
+                    "follow_up": [
+                        "message_id",
+                        "thread_id",
+                        "subject",
+                        "sender",
+                        "recipient_list",
+                        "label_list",
+                        "attachment_names",
+                    ]
+                },
+                "output_data_type": "SPREADSHEET_DATA",
+            }
+        ),
+        input_data={
+            "type": "SINGLE_EMAIL",
+            "id": "msg_123",
+            "threadId": "thread_77",
+            "subject": "회의 안내",
+            "from": "sender@example.com",
+            "to": ["user1@example.com", "user2@example.com"],
+            "labels": ["INBOX", "IMPORTANT"],
+            "attachments": [
+                {"filename": "agenda.pdf"},
+                {"filename": "notes.docx"},
+            ],
+        },
+        service_tokens={},
+    )
+
+    assert result == {
+        "type": "SPREADSHEET_DATA",
+        "headers": [
+            "message_id",
+            "thread_id",
+            "subject",
+            "sender",
+            "recipient_list",
+            "label_list",
+            "attachment_names",
+        ],
+        "rows": [
+            [
+                "msg_123",
+                "thread_77",
+                "회의 안내",
+                "sender@example.com",
+                "user1@example.com, user2@example.com",
+                "INBOX, IMPORTANT",
+                "agenda.pdf, notes.docx",
+            ]
+        ],
+    }
+
+
+async def test_data_filter_single_file_metadata_to_spreadsheet():
+    strategy = DataFilterNodeStrategy()
+
+    result = await strategy.execute(
+        node=_node(
+            {
+                "choiceActionId": "filter_metadata_table",
+                "choiceSelections": {
+                    "follow_up": ["filename", "link", "upload_time", "file_size"]
+                },
+                "output_data_type": "SPREADSHEET_DATA",
+            }
+        ),
+        input_data={
+            "type": "SINGLE_FILE",
+            "filename": "report.pdf",
+            "url": "https://drive.google.com/file/d/file_1",
+            "created_time": "2026-05-04T12:00:00Z",
+            "size": 4096,
+        },
+        service_tokens={},
+    )
+
+    assert result == {
+        "type": "SPREADSHEET_DATA",
+        "headers": ["filename", "link", "upload_time", "file_size"],
+        "rows": [
+            [
+                "report.pdf",
+                "https://drive.google.com/file/d/file_1",
+                "2026-05-04T12:00:00Z",
+                4096,
+            ]
+        ],
+    }
+
+
 async def test_data_filter_email_list_fields_to_spreadsheet():
     strategy = DataFilterNodeStrategy()
 
@@ -144,6 +243,84 @@ async def test_data_filter_api_response_fields_to_spreadsheet():
         "rows": [
             ["뉴스 1", "https://example.com/1"],
             ["뉴스 2", "https://example.com/2"],
+        ],
+    }
+
+
+async def test_data_filter_api_response_fields_table_serializes_nested_values():
+    strategy = DataFilterNodeStrategy()
+
+    result = await strategy.execute(
+        node=_node(
+            {
+                "choiceActionId": "filter_fields_table",
+                "choiceSelections": {
+                    "follow_up": ["title", "owners", "labels", "details"]
+                },
+                "output_data_type": "SPREADSHEET_DATA",
+            }
+        ),
+        input_data={
+            "type": "API_RESPONSE",
+            "data": {
+                "items": [
+                    {
+                        "title": "문서 1",
+                        "owners": [
+                            {"name": "Kim"},
+                            {"email": "owner@example.com"},
+                        ],
+                        "labels": ["urgent", "shared"],
+                        "details": {"title": "정책 문서"},
+                    }
+                ]
+            },
+        },
+        service_tokens={},
+    )
+
+    assert result == {
+        "type": "SPREADSHEET_DATA",
+        "headers": ["title", "owners", "labels", "details"],
+        "rows": [["문서 1", "Kim, owner@example.com", "urgent, shared", "정책 문서"]],
+    }
+
+
+async def test_data_filter_schedule_data_fields_table_serializes_attendees():
+    strategy = DataFilterNodeStrategy()
+
+    result = await strategy.execute(
+        node=_node(
+            {
+                "choiceActionId": "filter_fields_table",
+                "choiceSelections": {
+                    "follow_up": ["title", "start_time", "location", "attendees"]
+                },
+                "output_data_type": "SPREADSHEET_DATA",
+            }
+        ),
+        input_data={
+            "type": "SCHEDULE_DATA",
+            "items": [
+                {
+                    "title": "주간 회의",
+                    "start_time": "2026-05-11T10:00:00+09:00",
+                    "location": "회의실 A",
+                    "attendees": [
+                        {"email": "alice@example.com"},
+                        {"name": "Bob"},
+                    ],
+                }
+            ],
+        },
+        service_tokens={},
+    )
+
+    assert result == {
+        "type": "SPREADSHEET_DATA",
+        "headers": ["title", "start_time", "location", "attendees"],
+        "rows": [
+            ["주간 회의", "2026-05-11T10:00:00+09:00", "회의실 A", "alice@example.com, Bob"]
         ],
     }
 

@@ -7,11 +7,17 @@ logs or calling output-node write operations.
 from typing import Any
 
 from app.common.errors import ErrorCode, FlowifyException
+from app.core.nodes.google_sheets_common import (
+    build_sheet_range,
+    coerce_int,
+    extract_headers_and_rows,
+)
 from app.models.preview import NodePreviewResponse
 from app.models.workflow import NodeDefinition
 from app.services.integrations.canvas_lms import CanvasLmsService
 from app.services.integrations.gmail import GmailService
 from app.services.integrations.google_drive import GoogleDriveService
+from app.services.integrations.google_sheets import GoogleSheetsService
 from app.services.integrations.naver_news import NaverNewsService
 from app.services.integrations.web_news import WebNewsService
 
@@ -102,6 +108,14 @@ class WorkflowPreviewExecutor:
                 limit,
                 include_content,
             )
+        if service == "google_sheets":
+            return await self._preview_google_sheets(
+                token,
+                runtime_source.mode,
+                runtime_source.target,
+                runtime_source.config or node.config,
+                limit,
+            )
         if service == "canvas_lms":
             return await self._preview_canvas_lms(
                 token,
@@ -179,6 +193,79 @@ class WorkflowPreviewExecutor:
         raise FlowifyException(
             ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
             detail=f"service=google_drive, mode={mode} preview is not supported",
+        )
+
+    async def _preview_google_sheets(
+        self,
+        token: str,
+        mode: str,
+        target: str,
+        config: dict[str, Any],
+        limit: int,
+    ) -> dict[str, Any]:
+        svc = GoogleSheetsService()
+        spreadsheet_id = str(config.get("spreadsheet_id") or target or "").strip()
+        if not spreadsheet_id:
+            raise FlowifyException(
+                ErrorCode.INVALID_REQUEST,
+                detail="Google Sheets source preview requires spreadsheet_id.",
+            )
+
+        sheet_name = str(config.get("sheet_name") or "Sheet1").strip() or "Sheet1"
+        range_a1 = build_sheet_range(config)
+        header_row = coerce_int(config.get("header_row"), 1)
+        data_start_row = coerce_int(config.get("data_start_row"), max(header_row + 1, 2))
+        values = await svc.read_range(token, spreadsheet_id, range_a1)
+        headers, rows = extract_headers_and_rows(values, header_row, data_start_row)
+
+        if mode == "sheet_all":
+            return self._to_google_sheets_preview(
+                spreadsheet_id=spreadsheet_id,
+                sheet_name=sheet_name,
+                mode=mode,
+                headers=headers,
+                rows=rows,
+                sampled_rows=rows[:limit],
+                sample_strategy="head",
+            )
+
+        if mode == "new_row":
+            return self._to_google_sheets_preview(
+                spreadsheet_id=spreadsheet_id,
+                sheet_name=sheet_name,
+                mode=mode,
+                headers=headers,
+                rows=rows,
+                sampled_rows=rows[-limit:],
+                sample_strategy="tail",
+            )
+
+        if mode == "row_updated":
+            key_column = str(config.get("key_column") or "").strip()
+            if not key_column:
+                raise FlowifyException(
+                    ErrorCode.INVALID_REQUEST,
+                    detail="Google Sheets row_updated preview requires key_column.",
+                )
+            if key_column not in headers:
+                raise FlowifyException(
+                    ErrorCode.INVALID_REQUEST,
+                    detail=f"Google Sheets key_column '{key_column}' is not present in headers.",
+                )
+            return self._to_google_sheets_preview(
+                spreadsheet_id=spreadsheet_id,
+                sheet_name=sheet_name,
+                mode=mode,
+                headers=headers,
+                rows=rows,
+                sampled_rows=rows[-limit:],
+                sample_strategy="tail",
+                extra_metadata={"key_column": key_column},
+            )
+
+        raise FlowifyException(
+            ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
+            detail=f"service=google_sheets, mode={mode} preview is not supported",
         )
 
     async def _preview_gmail(
@@ -343,6 +430,40 @@ class WorkflowPreviewExecutor:
             if node.id == node_id:
                 return node
         raise FlowifyException(ErrorCode.INVALID_REQUEST, detail=f"Node '{node_id}' was not found.")
+
+    @staticmethod
+    def _to_google_sheets_preview(
+        *,
+        spreadsheet_id: str,
+        sheet_name: str,
+        mode: str,
+        headers: list[str],
+        rows: list[list[Any]],
+        sampled_rows: list[list[Any]],
+        sample_strategy: str,
+        extra_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        truncated = len(rows) > len(sampled_rows)
+        metadata = {
+            "mode": mode,
+            "sourceMode": mode,
+            "row_count": len(sampled_rows),
+            "total_rows": len(rows),
+            "truncated": truncated,
+            "sample_strategy": sample_strategy,
+        }
+        if extra_metadata:
+            metadata.update(extra_metadata)
+
+        return {
+            "type": "SPREADSHEET_DATA",
+            "spreadsheet_id": spreadsheet_id,
+            "sheet_name": sheet_name,
+            "headers": headers,
+            "rows": sampled_rows,
+            "metadata": metadata,
+            "truncated": truncated,
+        }
 
     @staticmethod
     def _to_drive_single_file(

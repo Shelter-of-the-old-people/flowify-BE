@@ -315,6 +315,44 @@ class TestExecuteWorkflow:
             "exec_callback_stopped", result
         )
 
+    @pytest.mark.asyncio
+    async def test_success_forwards_node_state_updates_to_callback(self, mock_db):
+        callback_service = _make_callback_service()
+        executor = WorkflowExecutor(mock_db, callback_service=callback_service)
+        executor._factory = _mock_factory(
+            return_value={
+                "type": "SPREADSHEET_DATA",
+                "headers": ["id"],
+                "rows": [["1"]],
+                "node_state_update": {
+                    "service": "google_sheets",
+                    "state": {"last_seen_row_index": 1},
+                },
+            }
+        )
+
+        result = await executor.execute(
+            execution_id="exec_callback_state_update",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=_make_nodes("input"),
+            edges=[],
+            service_tokens={},
+        )
+
+        callback_service.notify_execution_complete.assert_awaited_once_with(
+            "exec_callback_state_update",
+            result,
+            node_state_updates=[
+                {
+                    "nodeId": "node_1",
+                    "service": "google_sheets",
+                    "state": {"last_seen_row_index": 1},
+                }
+            ],
+        )
+        assert "node_state_update" not in result.nodeLogs[0].outputData
+
 
 class TestFileTypeBranchExecution:
     """File type branch executor-level routing tests."""

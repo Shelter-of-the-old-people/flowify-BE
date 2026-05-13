@@ -1,17 +1,30 @@
 """데이터 필터 노드 실행 전략."""
 
+import json
 from typing import Any
 
 from app.common.errors import ErrorCode, FlowifyException
 from app.core.nodes.base import NodeStrategy
 
-SUPPORTED_FILTER_ACTIONS = frozenset({"filter_fields", "filter_metadata"})
+SUPPORTED_FILTER_ACTIONS = frozenset(
+    {
+        "filter_fields",
+        "filter_fields_table",
+        "filter_metadata",
+        "filter_metadata_table",
+    }
+)
 UNSUPPORTED_FILTER_ACTIONS = frozenset({"filter_condition", "filter_type", "filter_content"})
 LIST_PAYLOAD_TYPES = frozenset({"FILE_LIST", "EMAIL_LIST", "SCHEDULE_DATA"})
 
 FIELD_ALIASES = {
+    "attachment_names": "attachments",
     "sender": "from",
+    "message_id": "id",
     "link": "url",
+    "label_list": "labels",
+    "recipient_list": "to",
+    "thread_id": "threadId",
     "upload_time": "created_time",
     "file_size": "size",
 }
@@ -278,11 +291,67 @@ class DataFilterNodeStrategy(NodeStrategy):
 
         fields = projected["fields"]
         if kind == "items":
-            rows = [[item.get(field, "") for field in fields] for item in projected["items"]]
+            rows = [
+                [self._serialize_spreadsheet_cell(item.get(field, "")) for field in fields]
+                for item in projected["items"]
+            ]
         else:
-            rows = [[projected["data"].get(field, "") for field in fields]]
+            rows = [
+                [
+                    self._serialize_spreadsheet_cell(projected["data"].get(field, ""))
+                    for field in fields
+                ]
+            ]
 
         return {"type": "SPREADSHEET_DATA", "headers": fields, "rows": rows}
+
+    @staticmethod
+    def _serialize_spreadsheet_cell(value: Any) -> Any:
+        """시트 셀에 쓰기 쉬운 형태로 값을 정규화합니다."""
+        if value is None:
+            return ""
+
+        if isinstance(value, (str, int, float, bool)):
+            return value
+
+        if isinstance(value, list):
+            serialized_items = [
+                DataFilterNodeStrategy._serialize_collection_item(item) for item in value
+            ]
+            serialized_items = [item for item in serialized_items if item]
+            return ", ".join(serialized_items)
+
+        if isinstance(value, dict):
+            preferred = DataFilterNodeStrategy._extract_preferred_label(value)
+            if preferred:
+                return preferred
+            return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+        return str(value)
+
+    @staticmethod
+    def _serialize_collection_item(value: Any) -> str:
+        if value is None:
+            return ""
+
+        if isinstance(value, (str, int, float, bool)):
+            return str(value)
+
+        if isinstance(value, dict):
+            preferred = DataFilterNodeStrategy._extract_preferred_label(value)
+            if preferred:
+                return preferred
+            return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+        return str(value)
+
+    @staticmethod
+    def _extract_preferred_label(value: dict[str, Any]) -> str:
+        for key in ("name", "filename", "title", "email", "id"):
+            raw = value.get(key)
+            if raw not in (None, ""):
+                return str(raw)
+        return ""
 
     @staticmethod
     def _to_api_response(projected: dict[str, Any]) -> dict[str, Any]:
