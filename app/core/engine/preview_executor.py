@@ -41,6 +41,7 @@ class WorkflowPreviewExecutor:
         service_tokens: dict[str, str],
         limit: int,
         include_content: bool,
+        runtime_context: dict[str, Any] | None = None,
     ) -> NodePreviewResponse:
         """Return preview data for a target node."""
         node = self._find_node(nodes, node_id)

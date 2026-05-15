@@ -548,6 +548,39 @@ async def test_gmail_send_text(service_tokens: dict) -> None:
     )
 
 
+async def test_gmail_send_text_uses_runtime_display_name(service_tokens: dict) -> None:
+    strategy = OutputNodeStrategy({})
+    node = _sink_node(
+        "gmail",
+        to="receiver@example.com",
+        subject="Flowify",
+        action="send",
+    )
+    node["runtime_context"] = {
+        "user_profile": {
+            "display_name": "김민호",
+            "email": "sender@example.com",
+        }
+    }
+    input_data = {"type": "TEXT", "content": "Mail body"}
+
+    with patch("app.core.nodes.output_node.GmailService") as mock_gmail_class:
+        mock_gmail = mock_gmail_class.return_value
+        mock_gmail.send_message = AsyncMock(
+            return_value={"id": "msg_123", "threadId": "thread_123"}
+        )
+
+        await strategy.execute(node, input_data, service_tokens)
+
+    mock_gmail.send_message.assert_awaited_once_with(
+        service_tokens["gmail"],
+        "receiver@example.com",
+        "Flowify",
+        "Mail body",
+        preferred_display_name="김민호",
+    )
+
+
 async def test_gmail_draft_uses_create_draft(service_tokens: dict) -> None:
     strategy = OutputNodeStrategy({})
     node = _sink_node(

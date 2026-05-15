@@ -106,7 +106,11 @@ class OutputNodeStrategy(NodeStrategy):
         if service == "slack":
             result = await self._send_slack(token, sink_config, input_data or {})
         elif service == "gmail":
-            result = await self._send_gmail(token, sink_config, input_data or {})
+            gmail_config = dict(sink_config)
+            runtime_context = node.get("runtime_context")
+            if runtime_context is not None:
+                gmail_config["runtime_context"] = runtime_context
+            result = await self._send_gmail(token, gmail_config, input_data or {})
         elif service == "notion":
             result = await self._send_notion(token, sink_config, input_data or {})
         elif service == "google_drive":
@@ -187,6 +191,7 @@ class OutputNodeStrategy(NodeStrategy):
         to = config["to"]
         subject = config["subject"]
         action = config.get("action", "send").lower()
+        preferred_display_name = self._gmail_preferred_display_name(config)
         if action not in {"send", "draft"}:
             raise FlowifyException(
                 ErrorCode.INVALID_REQUEST,
@@ -197,15 +202,19 @@ class OutputNodeStrategy(NodeStrategy):
         svc = GmailService()
         if action == "send":
             if attachments:
-                result = await svc.send_message(token, to, subject, body, attachments)
+                kwargs = {"preferred_display_name": preferred_display_name} if preferred_display_name else {}
+                result = await svc.send_message(token, to, subject, body, attachments, **kwargs)
             else:
-                result = await svc.send_message(token, to, subject, body)
+                kwargs = {"preferred_display_name": preferred_display_name} if preferred_display_name else {}
+                result = await svc.send_message(token, to, subject, body, **kwargs)
             return self._to_gmail_send_result(result, to, subject, status="sent")
 
         if attachments:
-            result = await svc.create_draft(token, to, subject, body, attachments)
+            kwargs = {"preferred_display_name": preferred_display_name} if preferred_display_name else {}
+            result = await svc.create_draft(token, to, subject, body, attachments, **kwargs)
         else:
-            result = await svc.create_draft(token, to, subject, body)
+            kwargs = {"preferred_display_name": preferred_display_name} if preferred_display_name else {}
+            result = await svc.create_draft(token, to, subject, body, **kwargs)
         return self._to_gmail_send_result(result, to, subject, status="drafted")
 
     async def _send_notion(self, token: str, config: dict, input_data: dict) -> dict:
@@ -584,7 +593,22 @@ class OutputNodeStrategy(NodeStrategy):
                 if item.get("content") is not None
             ]
             body = config.get("body") or OutputNodeStrategy._file_list_summary(items)
-            return body, attachments
+        return body, attachments
+
+    @staticmethod
+    def _gmail_preferred_display_name(config: dict) -> str:
+        runtime_context = config.get("runtime_context")
+        if not isinstance(runtime_context, dict):
+            return ""
+
+        user_profile = runtime_context.get("user_profile")
+        if not isinstance(user_profile, dict):
+            return ""
+
+        display_name = user_profile.get("display_name")
+        if not isinstance(display_name, str):
+            return ""
+        return display_name.strip()
 
         return str(input_data), []
 

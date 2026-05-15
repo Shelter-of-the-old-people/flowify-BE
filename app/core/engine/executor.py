@@ -78,6 +78,7 @@ class WorkflowExecutor:
         nodes: list[NodeDefinition],
         edges: list[EdgeDefinition],
         service_tokens: dict,
+        runtime_context: dict[str, Any] | None = None,
     ) -> WorkflowExecution:
         state_manager = WorkflowStateManager()
         snapshot_manager = SnapshotManager()
@@ -155,7 +156,7 @@ class WorkflowExecutor:
                 )
 
                 node_log, state_update = await self._execute_node(
-                    node_def, input_data, service_tokens, snapshot_manager
+                    node_def, input_data, service_tokens, snapshot_manager, runtime_context
                 )
                 if state_update:
                     node_state_updates.append(state_update)
@@ -226,6 +227,7 @@ class WorkflowExecutor:
                         loop_output=loop_output,
                         service_tokens=service_tokens,
                         snapshot_manager=snapshot_manager,
+                        runtime_context=runtime_context,
                         downstream_nodes=downstream_nodes,
                     )
                     execution.nodeLogs.append(aggregate_log)
@@ -309,6 +311,7 @@ class WorkflowExecutor:
         input_data: dict[str, Any] | None,
         service_tokens: dict[str, str],
         snapshot_manager: SnapshotManager,
+        runtime_context: dict[str, Any] | None = None,
     ) -> tuple[NodeExecutionLog, dict[str, Any] | None]:
         """단일 노드 실행. 스냅샷 저장, 타이밍 측정, 에러 캐치."""
         started_at = datetime.now(UTC)
@@ -321,6 +324,8 @@ class WorkflowExecutor:
         node = self._factory.create_from_node_def(node_def)
         # node dict로 변환 (runtime 필드 포함, snake_case 유지)
         node_dict = node_def.model_dump(by_alias=False)
+        if runtime_context:
+            node_dict["runtime_context"] = copy.deepcopy(runtime_context)
 
         try:
             output_data = await node.execute(
@@ -855,6 +860,7 @@ class WorkflowExecutor:
         loop_output: dict[str, Any],
         service_tokens: dict[str, str],
         snapshot_manager: "SnapshotManager",
+        runtime_context: dict[str, Any] | None = None,
         downstream_nodes: list[NodeDefinition] | None = None,
     ) -> NodeExecutionLog:
         """Loop body node를 items 수만큼 반복 실행하고 aggregate log를 반환."""
@@ -873,6 +879,8 @@ class WorkflowExecutor:
         # Body node strategy 생성
         body_strategy = self._factory.create_from_node_def(body_node_def)
         body_node_dict = body_node_def.model_dump(by_alias=False)
+        if runtime_context:
+            body_node_dict["runtime_context"] = copy.deepcopy(runtime_context)
 
         body_results: list[dict[str, Any]] = []
 

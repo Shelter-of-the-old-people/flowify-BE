@@ -2,6 +2,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.models.runtime_context import RuntimeContext
 from app.models.workflow import WorkflowDefinition
 
 
@@ -10,6 +11,7 @@ class NodePreviewRequest(BaseModel):
 
     workflow: WorkflowDefinition
     service_tokens: dict[str, str] = Field(default_factory=dict)
+    runtime_context: RuntimeContext | None = None
     limit: int = Field(default=5, ge=1, le=20)
     include_content: bool = False
 
