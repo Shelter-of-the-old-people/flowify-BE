@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.models.runtime_context import RuntimeContext
 from app.models.workflow import WorkflowDefinition
 
 # ── 워크플로우 실행 ──
@@ -22,6 +23,7 @@ class WorkflowExecuteRequest(BaseModel):
 
     workflow: WorkflowDefinition
     service_tokens: dict[str, str] = Field(default_factory=dict)
+    runtime_context: RuntimeContext | None = None
 
 
 class ExecutionResult(BaseModel):

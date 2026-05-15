@@ -166,6 +166,32 @@ class TestWorkflowExecuteRequest:
         )
         assert req.service_tokens == {}
 
+    def test_runtime_context_user_profile(self):
+        req = WorkflowExecuteRequest.model_validate(
+            {
+                "workflow": {
+                    "name": "워크플로우",
+                    "userId": "usr_1",
+                    "nodes": [],
+                    "edges": [],
+                    "trigger": {"type": "manual", "config": {}},
+                    "active": True,
+                    "template": False,
+                },
+                "service_tokens": {},
+                "runtime_context": {
+                    "user_profile": {
+                        "user_id": "usr_1",
+                        "email": "user@example.com",
+                        "display_name": "김민호",
+                    }
+                },
+            }
+        )
+        assert req.runtime_context is not None
+        assert req.runtime_context.user_profile is not None
+        assert req.runtime_context.user_profile.display_name == "김민호"
+
     def test_missing_workflow_raises(self):
         with pytest.raises(ValidationError):
             WorkflowExecuteRequest.model_validate({"service_tokens": {}})

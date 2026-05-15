@@ -70,9 +70,12 @@ class GmailService(BaseIntegrationService):
         subject: str,
         body: str,
         attachments: list[dict] | None = None,
+        preferred_display_name: str = "",
     ) -> dict:
         """Send a Gmail message."""
-        sender_email, sender_display_name = await self._get_sender_identity(token)
+        sender_email, sender_display_name = await self._get_sender_identity(
+            token, preferred_display_name
+        )
         raw = self._build_raw_message(
             to,
             subject,
@@ -96,9 +99,12 @@ class GmailService(BaseIntegrationService):
         subject: str,
         body: str,
         attachments: list[dict] | None = None,
+        preferred_display_name: str = "",
     ) -> dict:
         """Create a Gmail draft."""
-        sender_email, sender_display_name = await self._get_sender_identity(token)
+        sender_email, sender_display_name = await self._get_sender_identity(
+            token, preferred_display_name
+        )
         raw = self._build_raw_message(
             to,
             subject,
@@ -120,18 +126,24 @@ class GmailService(BaseIntegrationService):
         profile = await self._request("GET", f"{GMAIL_API}/profile", token)
         return str(profile.get("emailAddress", "")).strip()
 
-    async def _get_sender_identity(self, token: str) -> tuple[str, str]:
+    async def _get_sender_identity(
+        self, token: str, preferred_display_name: str = ""
+    ) -> tuple[str, str]:
         """Return the authenticated sender email and preferred display name."""
         try:
             send_as_data = await self._request("GET", f"{GMAIL_API}/settings/sendAs", token)
         except Exception as exc:
             logger.warning("Falling back to bare Gmail sender email because sendAs lookup failed: %s", exc)
-            return await self._get_sender_email(token), ""
+            return await self._get_sender_email(token), self._normalize_display_name(
+                preferred_display_name
+            )
 
         send_as_list = send_as_data.get("sendAs", [])
         if not isinstance(send_as_list, list) or not send_as_list:
             logger.info("Falling back to bare Gmail sender email because sendAs list is empty")
-            return await self._get_sender_email(token), ""
+            return await self._get_sender_email(token), self._normalize_display_name(
+                preferred_display_name
+            )
 
         chosen = next((item for item in send_as_list if item.get("isPrimary")), None)
         if chosen is None:
@@ -143,7 +155,9 @@ class GmailService(BaseIntegrationService):
         if not email_address:
             logger.info("Falling back to profile email because chosen sendAs entry has no email")
             email_address = await self._get_sender_email(token)
-        display_name = self._decode_header_value(str(chosen.get("displayName") or "").strip())
+        display_name = self._normalize_display_name(preferred_display_name)
+        if not display_name:
+            display_name = self._decode_header_value(str(chosen.get("displayName") or "").strip())
         if not display_name:
             logger.info("Using bare Gmail sender email because chosen sendAs entry has no displayName")
         return email_address, display_name
@@ -187,6 +201,10 @@ class GmailService(BaseIntegrationService):
         if not display_name:
             return email_address
         return formataddr((str(Header(display_name, "utf-8")), email_address))
+
+    @staticmethod
+    def _normalize_display_name(display_name: str) -> str:
+        return str(display_name or "").strip()
 
     @staticmethod
     def _decode_header_value(raw_value: str) -> str:

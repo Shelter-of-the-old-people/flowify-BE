@@ -22,6 +22,7 @@ async def _run_workflow(
     workflow_def,
     service_tokens: dict,
     user_id: str,
+    runtime_context: dict | None = None,
 ) -> None:
     """백그라운드에서 워크플로우를 실행합니다."""
     executor = WorkflowExecutor(db)
@@ -32,6 +33,7 @@ async def _run_workflow(
         nodes=workflow_def.nodes,
         edges=workflow_def.edges,
         service_tokens=service_tokens,
+        runtime_context=runtime_context,
     )
 
 
@@ -60,6 +62,7 @@ async def execute_workflow(
         request.workflow,
         request.service_tokens,
         user_id,
+        request.runtime_context.model_dump(exclude_none=True) if request.runtime_context else None,
     )
 
     return ExecutionResult(execution_id=execution_id)
@@ -79,6 +82,7 @@ async def preview_node(
         node_id=node_id,
         nodes=request.workflow.nodes,
         service_tokens=request.service_tokens,
+        runtime_context=request.runtime_context.model_dump(exclude_none=True) if request.runtime_context else None,
         limit=request.limit,
         include_content=request.include_content,
     )

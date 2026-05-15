@@ -178,6 +178,36 @@ class TestGmailService:
         assert parsed["From"] == "sender@test.com"
 
     @pytest.mark.asyncio
+    async def test_send_message_prefers_runtime_display_name_over_send_as(self, gmail):
+        with patch.object(gmail, "_request", new_callable=AsyncMock) as mock_req:
+            mock_req.side_effect = [
+                {
+                    "sendAs": [
+                        {
+                            "sendAsEmail": "sender@test.com",
+                            "displayName": "Old Name",
+                            "isPrimary": True,
+                        }
+                    ]
+                },
+                {"id": "sent_1", "labelIds": ["SENT"]},
+            ]
+
+            await gmail.send_message(
+                "token",
+                "to@test.com",
+                "Subject",
+                "Body",
+                preferred_display_name="김민호",
+            )
+
+        send_call = mock_req.await_args_list[1]
+        raw = send_call.kwargs["json"]["raw"]
+        parsed = message_from_bytes(base64.urlsafe_b64decode(raw))
+        decoded_from = str(make_header(decode_header(parsed["From"])))
+        assert decoded_from == "김민호 <sender@test.com>"
+
+    @pytest.mark.asyncio
     async def test_list_messages(self, gmail):
         with patch.object(gmail, "_request", new_callable=AsyncMock) as mock_req:
             mock_req.return_value = {"messages": [{"id": "msg_1"}, {"id": "msg_2"}]}
