@@ -6,7 +6,6 @@ from app.core.nodes.input_node import InputNodeStrategy
 from app.core.nodes.llm_node import LLMNodeStrategy
 from app.core.nodes.logic_node import IfElseNodeStrategy, LoopNodeStrategy
 from app.core.nodes.output_node import OutputNodeStrategy
-from app.core.nodes.passthrough_node import PassthroughNodeStrategy
 
 _NODE_REGISTRY: dict[str, type[NodeStrategy]] = {
     "input": InputNodeStrategy,
@@ -15,12 +14,10 @@ _NODE_REGISTRY: dict[str, type[NodeStrategy]] = {
     "if_else": IfElseNodeStrategy,
     "loop": LoopNodeStrategy,
     "output": OutputNodeStrategy,
-    "passthrough": PassthroughNodeStrategy,
     "data_filter": DataFilterNodeStrategy,
 }
 
 _LLM_SUBTYPE_STRATEGY_KEYS: dict[str, str] = {
-    "PASSTHROUGH": "passthrough",
     "DATA_FILTER": "data_filter",
 }
 
