@@ -110,7 +110,12 @@ class OutputNodeStrategy(NodeStrategy):
             runtime_context = node.get("runtime_context")
             if runtime_context is not None:
                 gmail_config["runtime_context"] = runtime_context
-            result = await self._send_gmail(token, gmail_config, input_data or {})
+            result = await self._send_gmail(
+                token,
+                gmail_config,
+                input_data or {},
+                service_tokens,
+            )
         elif service == "notion":
             result = await self._send_notion(token, sink_config, input_data or {})
         elif service == "google_drive":
@@ -187,7 +192,13 @@ class OutputNodeStrategy(NodeStrategy):
 
         return {"status_code": response.status_code}
 
-    async def _send_gmail(self, token: str, config: dict, input_data: dict) -> dict:
+    async def _send_gmail(
+        self,
+        token: str,
+        config: dict,
+        input_data: dict,
+        service_tokens: dict[str, str],
+    ) -> dict:
         to = config["to"]
         subject = config["subject"]
         action = config.get("action", "send").lower()
@@ -198,7 +209,11 @@ class OutputNodeStrategy(NodeStrategy):
                 detail=f"Gmail action must be 'send' or 'draft', got '{action}'.",
             )
 
-        body, attachments = self._gmail_body_and_attachments(config, input_data)
+        body, attachments = await self._resolve_gmail_body_and_attachments(
+            config,
+            input_data,
+            service_tokens,
+        )
         svc = GmailService()
         if action == "send":
             if attachments:
@@ -564,36 +579,40 @@ class OutputNodeStrategy(NodeStrategy):
         escaped_sheet_name = str(sheet_name).replace("'", "''")
         return f"'{escaped_sheet_name}'!{start_column}{row_index}:{end_column}{row_index}"
 
-    @staticmethod
-    def _gmail_body_and_attachments(config: dict, input_data: dict) -> tuple[str, list[dict]]:
+    async def _resolve_gmail_body_and_attachments(
+        self,
+        config: dict,
+        input_data: dict,
+        service_tokens: dict[str, str],
+    ) -> tuple[str, list[dict[str, Any]]]:
         data_type = input_data.get("type", "TEXT")
         if data_type == "TEXT":
             return config.get("body") or input_data.get("content", ""), []
 
         if data_type == "SINGLE_FILE":
-            filename = input_data.get("filename", "attachment")
+            filename = input_data.get("filename") or "attachment"
+            mime_type = input_data.get("mime_type") or "application/octet-stream"
             body = config.get("body") or f"Attached file: {filename}"
-            return body, [
-                {
-                    "filename": filename,
-                    "mime_type": input_data.get("mime_type") or "application/octet-stream",
-                    "content": input_data.get("content", ""),
-                }
-            ]
+            content = await self._get_single_file_bytes(input_data, service_tokens)
+            return body, [{"filename": filename, "mime_type": mime_type, "content": content}]
 
         if data_type == "FILE_LIST":
             items = input_data.get("items", [])
-            attachments = [
-                {
-                    "filename": item.get("filename") or "attachment",
-                    "mime_type": item.get("mime_type") or "application/octet-stream",
-                    "content": item["content"],
-                }
-                for item in items
-                if item.get("content") is not None
-            ]
-            body = config.get("body") or OutputNodeStrategy._file_list_summary(items)
-        return body, attachments
+            attachments = []
+            for index, item in enumerate(items, start=1):
+                raw_filename = item.get("filename") or f"file_{index}"
+                filename, mime_type, content = await self._get_file_list_item_upload_data(
+                    raw_filename,
+                    item,
+                    service_tokens,
+                )
+                attachments.append(
+                    {"filename": filename, "mime_type": mime_type, "content": content}
+                )
+            body = config.get("body") or self._file_list_summary(items)
+            return body, attachments
+
+        return str(input_data), []
 
     @staticmethod
     def _gmail_preferred_display_name(config: dict) -> str:
@@ -609,8 +628,6 @@ class OutputNodeStrategy(NodeStrategy):
         if not isinstance(display_name, str):
             return ""
         return display_name.strip()
-
-        return str(input_data), []
 
     @staticmethod
     def _to_gmail_send_result(
@@ -707,9 +724,13 @@ class OutputNodeStrategy(NodeStrategy):
     ) -> bytes:
         if input_data.get("source_service") == "google_drive" and input_data.get("file_id"):
             token = service_tokens.get("google_drive", "")
-            if token:
-                svc = GoogleDriveService()
-                return await svc.download_file_bytes(token, input_data["file_id"])
+            if not token:
+                raise FlowifyException(
+                    ErrorCode.OAUTH_TOKEN_INVALID,
+                    detail="'google_drive' service token is missing.",
+                )
+            svc = GoogleDriveService()
+            return await svc.download_file_bytes(token, input_data["file_id"])
 
         content = input_data.get("content")
         if content is not None:
@@ -730,9 +751,13 @@ class OutputNodeStrategy(NodeStrategy):
         mime_type = item.get("mime_type") or "application/octet-stream"
         if item.get("source_service") == "google_drive" and item.get("file_id"):
             token = service_tokens.get("google_drive", "")
-            if token:
-                svc = GoogleDriveService()
-                return filename, mime_type, await svc.download_file_bytes(token, item["file_id"])
+            if not token:
+                raise FlowifyException(
+                    ErrorCode.OAUTH_TOKEN_INVALID,
+                    detail="'google_drive' service token is missing.",
+                )
+            svc = GoogleDriveService()
+            return filename, mime_type, await svc.download_file_bytes(token, item["file_id"])
 
         content = item.get("content")
         if content is not None:
