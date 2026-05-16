@@ -642,6 +642,183 @@ async def test_gmail_rejects_single_email_type(service_tokens: dict) -> None:
     assert exc_info.value.error_code == ErrorCode.INVALID_REQUEST
 
 
+async def test_gmail_single_file_uses_drive_source_bytes(service_tokens: dict) -> None:
+    strategy = OutputNodeStrategy({})
+    node = _sink_node(
+        "gmail",
+        to="receiver@example.com",
+        subject="Drive file",
+        action="send",
+    )
+    input_data = {
+        "type": "SINGLE_FILE",
+        "source_service": "google_drive",
+        "file_id": "file_123",
+        "filename": "lecture.pdf",
+        "mime_type": "application/pdf",
+        "content": "stale text should not be attached",
+    }
+
+    with (
+        patch("app.core.nodes.output_node.GoogleDriveService") as mock_drive_class,
+        patch("app.core.nodes.output_node.GmailService") as mock_gmail_class,
+    ):
+        mock_drive = mock_drive_class.return_value
+        mock_drive.download_file_bytes = AsyncMock(return_value=b"%PDF-1.7 real bytes")
+        mock_gmail = mock_gmail_class.return_value
+        mock_gmail.send_message = AsyncMock(
+            return_value={"id": "msg_123", "threadId": "thread_123"}
+        )
+
+        result = await strategy.execute(node, input_data, service_tokens)
+
+    assert result["detail"]["messageId"] == "msg_123"
+    mock_drive.download_file_bytes.assert_awaited_once_with(
+        service_tokens["google_drive"],
+        "file_123",
+    )
+    mock_gmail.send_message.assert_awaited_once_with(
+        service_tokens["gmail"],
+        "receiver@example.com",
+        "Drive file",
+        "Attached file: lecture.pdf",
+        [
+            {
+                "filename": "lecture.pdf",
+                "mime_type": "application/pdf",
+                "content": b"%PDF-1.7 real bytes",
+            }
+        ],
+    )
+
+
+async def test_gmail_file_list_uses_drive_source_bytes(service_tokens: dict) -> None:
+    strategy = OutputNodeStrategy({})
+    node = _sink_node(
+        "gmail",
+        to="receiver@example.com",
+        subject="Drive files",
+        action="send",
+    )
+    input_data = {
+        "type": "FILE_LIST",
+        "items": [
+            {
+                "source_service": "google_drive",
+                "file_id": "file_1",
+                "filename": "a.pdf",
+                "mime_type": "application/pdf",
+                "content": "stale a",
+            },
+            {
+                "source_service": "google_drive",
+                "file_id": "file_2",
+                "filename": "b.txt",
+                "mime_type": "text/plain",
+                "content": "stale b",
+            },
+        ],
+    }
+
+    with (
+        patch("app.core.nodes.output_node.GoogleDriveService") as mock_drive_class,
+        patch("app.core.nodes.output_node.GmailService") as mock_gmail_class,
+    ):
+        mock_drive = mock_drive_class.return_value
+        mock_drive.download_file_bytes = AsyncMock(side_effect=[b"real-pdf", b"real-text"])
+        mock_gmail = mock_gmail_class.return_value
+        mock_gmail.send_message = AsyncMock(
+            return_value={"id": "msg_123", "threadId": "thread_123"}
+        )
+
+        await strategy.execute(node, input_data, service_tokens)
+
+    assert mock_drive.download_file_bytes.await_count == 2
+    mock_drive.download_file_bytes.assert_any_await(
+        service_tokens["google_drive"],
+        "file_1",
+    )
+    mock_drive.download_file_bytes.assert_any_await(
+        service_tokens["google_drive"],
+        "file_2",
+    )
+    attachments = mock_gmail.send_message.await_args.args[4]
+    assert attachments == [
+        {"filename": "a.pdf", "mime_type": "application/pdf", "content": b"real-pdf"},
+        {"filename": "b.txt", "mime_type": "text/plain", "content": b"real-text"},
+    ]
+
+
+async def test_gmail_file_list_preserves_content_items(service_tokens: dict) -> None:
+    strategy = OutputNodeStrategy({})
+    node = _sink_node(
+        "gmail",
+        to="receiver@example.com",
+        subject="Content files",
+        action="send",
+    )
+    input_data = {
+        "type": "FILE_LIST",
+        "items": [
+            {
+                "filename": "note.txt",
+                "mime_type": "text/plain",
+                "content": "hello",
+            }
+        ],
+    }
+
+    with (
+        patch("app.core.nodes.output_node.GoogleDriveService") as mock_drive_class,
+        patch("app.core.nodes.output_node.GmailService") as mock_gmail_class,
+    ):
+        mock_gmail = mock_gmail_class.return_value
+        mock_gmail.send_message = AsyncMock(
+            return_value={"id": "msg_123", "threadId": "thread_123"}
+        )
+
+        await strategy.execute(node, input_data, service_tokens)
+
+    mock_drive_class.assert_not_called()
+    attachments = mock_gmail.send_message.await_args.args[4]
+    assert attachments == [
+        {"filename": "note.txt", "mime_type": "text/plain", "content": b"hello"}
+    ]
+
+
+async def test_gmail_drive_file_requires_drive_token(service_tokens: dict) -> None:
+    strategy = OutputNodeStrategy({})
+    node = _sink_node(
+        "gmail",
+        to="receiver@example.com",
+        subject="Drive file",
+        action="send",
+    )
+    input_data = {
+        "type": "SINGLE_FILE",
+        "source_service": "google_drive",
+        "file_id": "file_123",
+        "filename": "lecture.pdf",
+        "mime_type": "application/pdf",
+    }
+    missing_drive_tokens = dict(service_tokens)
+    missing_drive_tokens.pop("google_drive")
+
+    with (
+        patch("app.core.nodes.output_node.GoogleDriveService") as mock_drive_class,
+        patch("app.core.nodes.output_node.GmailService") as mock_gmail_class,
+    ):
+        mock_gmail = mock_gmail_class.return_value
+        mock_gmail.send_message = AsyncMock()
+
+        with pytest.raises(FlowifyException) as exc_info:
+            await strategy.execute(node, input_data, missing_drive_tokens)
+
+    assert exc_info.value.error_code == ErrorCode.OAUTH_TOKEN_INVALID
+    mock_drive_class.assert_not_called()
+    mock_gmail.send_message.assert_not_awaited()
+
+
 async def test_notion_create_page_text(service_tokens: dict) -> None:
     strategy = OutputNodeStrategy({})
     node = _sink_node("notion", target_type="page", target_id="page_123")
