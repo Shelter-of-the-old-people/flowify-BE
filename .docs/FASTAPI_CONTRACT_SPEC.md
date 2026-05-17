@@ -136,7 +136,6 @@ POST {FASTAPI_URL}/api/v1/workflows/{workflowId}/execute
   },
   "service_tokens": {
     "google_drive": "ya29.a0AfH6SMBx...",
-    "slack": "xoxb-123456789-..."
   }
 }
 ```

@@ -112,7 +112,7 @@ def test_create_interval_trigger_accepts_legacy_fields(client_with_scheduler) ->
         type="interval",
         config={"seconds": 300},
         service_tokens=None,
-        credentials={"slack": "xoxb-token"},
+        credentials={"notion": "secret-token"},
     )
     payload.pop("trigger_type")
     payload.pop("service_tokens")
@@ -137,7 +137,7 @@ def test_create_interval_trigger_accepts_legacy_fields(client_with_scheduler) ->
                 "edges": [],
                 "active": True,
             },
-            "service_tokens": {"slack": "xoxb-token"},
+            "service_tokens": {"notion": "secret-token"},
             "user_id": "usr_test123",
         },
         replace_existing=True,

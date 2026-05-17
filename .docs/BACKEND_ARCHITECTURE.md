@@ -181,7 +181,6 @@ DELETE /api/workflows/{id}/nodes/{nodeId}                  → 노드 삭제 (�
   │   Header: X-Internal-Token, X-User-ID
   │   Body: {
   │     "workflow": { 워크플로우 전체 정의 },
-  │     "service_tokens": { "slack": "xoxb-...", "gmail": "ya29.a0..." }
   │   }
 [FastAPI]
   │   ┌─────────────────────────────────────────────────┐
@@ -274,10 +273,8 @@ GET /api/workflows/{id}/executions/{execId}   → 특정 실행의 노드별 로
 ```
 [프론트엔드] (JWT 보유)
   │
-  ▼ POST /api/oauth-tokens/slack/connect
 [Spring Boot]
   ├─ userId를 AES-GCM 암호화 → state 파라미터 생성
-  └─ 응답: { "authUrl": "https://slack.com/oauth/v2/authorize?...&state=..." }
        │
 [프론트엔드]
   └─ window.location.href = authUrl
@@ -285,15 +282,11 @@ GET /api/workflows/{id}/executions/{execId}   → 특정 실행의 노드별 로
 [Slack]
   └─ 사용자 로그인 & 권한 허용
        │
-       ▼ GET /api/oauth-tokens/slack/callback?code=...&state=... (JWT 없음)
 [Spring Boot]
   ├─ state 복호화 → userId 추출
-  ├─ POST https://slack.com/api/oauth.v2.access (code → access_token 교환)
   ├─ access_token을 AES-GCM 암호화하여 MongoDB 저장
   └─ 302 리다이렉트
        │
-       ▼ 성공: https://프론트/oauth/callback?service=slack&connected=true
-       ▼ 실패: https://프론트/oauth/callback?service=slack&error=oauth_failed
 ```
 
 ### 연결 확인 / 해제
@@ -399,9 +392,6 @@ Content-Type: application/json
 | `GOOGLE_CLIENT_SECRET` | Google OAuth Client Secret | (필수) |
 | `GOOGLE_REDIRECT_URI` | Google 콜백 URL | (필수) |
 | `FRONT_REDIRECT_URI` | 프론트 인증 콜백 URL | (필수) |
-| `SLACK_CLIENT_ID` | Slack App Client ID | (필수) |
-| `SLACK_CLIENT_SECRET` | Slack App Client Secret | (필수) |
-| `SLACK_REDIRECT_URI` | Slack 콜백 URL | (필수) |
 | `JWT_SECRET` | JWT 서명 키 | (필수) |
 | `ENCRYPTION_SECRET_KEY` | AES-256 암호화 키 (Base64) | (필수) |
 | `FASTAPI_URL` | FastAPI 베이스 URL | `http://localhost:8000` |

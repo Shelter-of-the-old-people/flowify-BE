@@ -241,7 +241,6 @@ sequenceDiagram
 sequenceDiagram
     participant Exec as WorkflowExecutor
     participant Output as OutputNodeStrategy
-    participant Slack as SlackService
     participant API as Slack API
 
     Exec->>Output: await execute(input_data)
@@ -249,7 +248,6 @@ sequenceDiagram
     Note over Output: input_data.credentials.slack → token 추출
 
     Output->>Slack: await send_message(token, config.channel, input_data.llm_result)
-    Slack->>API: POST https://slack.com/api/chat.postMessage
     Note over API: Authorization: Bearer {token}<br/>Body: { channel, text }
     API-->>Slack: { ok: true, ts: "..." }
 

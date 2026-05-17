@@ -91,7 +91,6 @@ HTTP 401 Unauthorized
     "user_id": "usr_987xyz",
     "credentials": {
       "google": "ya29.a0AfB_...",
-      "slack": "xoxb-..."
     },
     "nodes": [ ... ],
     "edges": [ ... ]
@@ -340,7 +339,6 @@ HTTP 401 Unauthorized
     "type": "cron",
     "config": { "hour": 9, "minute": 0 },
     "workflow_definition": { "nodes": [...], "edges": [...] },
-    "credentials": { "google": "ya29...", "slack": "xoxb-..." }
   }
   ```
 

@@ -188,7 +188,6 @@ POST /api/v1/workflows/{workflowId}/execute
   },
   "service_tokens": {
     "google_drive": "ya29.a0AfH6SMBx...",
-    "slack": "xoxb-123456789-..."
   }
 }
 ```
@@ -559,7 +558,6 @@ def send_to_slack(token, config, input_data):
     header = config.get("header", "")
     fmt = config.get("message_format", "plain")
     # Slack API: chat.postMessage
-    # POST https://slack.com/api/chat.postMessage
     # Authorization: Bearer {token}
     # Body: { "channel": channel, "text": message }
 ```
@@ -935,8 +933,6 @@ class OutputNodeStrategy:
 
 ### 9.4 Slack
 
-**인증:** `Authorization: Bearer {service_tokens["slack"]}`
-**Base URL:** `https://slack.com/api`
 
 | mode/동작 | API 호출 |
 |----------|---------|
@@ -1341,7 +1337,6 @@ POST /api/workflows/{id}/execute
 #    - runtime_type: "input" (start node)
 #    - runtime_source.service: "slack"
 #    - runtime_source.mode: "channel_messages"
-#    - service_tokens["slack"]: "xoxb-..."
 
 # 3. FastAPI가 Slack API 호출
 #    - conversations.history → TEXT payload 생성

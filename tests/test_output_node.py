@@ -13,25 +13,16 @@ def _sink_node(service: str, **config) -> dict:
     return {"runtime_sink": {"service": service, "config": config}}
 
 
-async def test_slack_send_text(service_tokens: dict) -> None:
+async def test_removed_slack_sink_raises_unsupported() -> None:
+    """기존 workflow에 남은 Slack sink는 API 호출 없이 unsupported로 실패합니다."""
     strategy = OutputNodeStrategy({})
     node = _sink_node("slack", channel="#test")
-    input_data = {"type": "TEXT", "content": "Hello Slack"}
+    input_data = {"type": "TEXT", "content": "legacy message"}
 
-    with patch("app.core.nodes.output_node.SlackService") as mock_slack_class:
-        mock_slack = mock_slack_class.return_value
-        mock_slack.send_message = AsyncMock(return_value={"ok": True, "ts": "1.23"})
+    with pytest.raises(FlowifyException) as exc_info:
+        await strategy.execute(node, input_data, {})
 
-        result = await strategy.execute(node, input_data, service_tokens)
-
-    assert result == {
-        "status": "sent",
-        "service": "slack",
-        "detail": {"ok": True, "ts": "1.23"},
-    }
-    mock_slack.send_message.assert_awaited_once_with(
-        service_tokens["slack"], "#test", "Hello Slack"
-    )
+    assert exc_info.value.error_code == ErrorCode.UNSUPPORTED_RUNTIME_SINK
 
 
 async def test_discord_send_text_without_service_token() -> None:
@@ -1231,7 +1222,7 @@ async def test_incompatible_input_type_raises(service_tokens: dict) -> None:
 
     with pytest.raises(FlowifyException) as exc_info:
         await strategy.execute(
-            _sink_node("slack", channel="#test"),
+            _sink_node("discord", webhook_url="https://discord.com/api/webhooks/test/token"),
             {"type": "SPREADSHEET_DATA", "headers": [], "rows": []},
             service_tokens,
         )
@@ -1244,7 +1235,7 @@ async def test_missing_token_raises() -> None:
 
     with pytest.raises(FlowifyException) as exc_info:
         await strategy.execute(
-            _sink_node("slack", channel="#test"),
+            _sink_node("gmail", to="user@example.com", subject="Hello", action="send"),
             {"type": "TEXT", "content": "hello"},
             {},
         )
@@ -1255,11 +1246,13 @@ async def test_missing_token_raises() -> None:
 def test_validate_supported_sink_returns_true() -> None:
     strategy = OutputNodeStrategy({})
 
-    assert strategy.validate(_sink_node("slack", channel="#test")) is True
+    assert strategy.validate(
+        _sink_node("discord", webhook_url="https://discord.com/api/webhooks/test/token")
+    ) is True
 
 
 def test_validate_missing_required_config_returns_false() -> None:
     strategy = OutputNodeStrategy({})
 
-    assert strategy.validate(_sink_node("slack")) is False
+    assert strategy.validate(_sink_node("discord")) is False
     assert strategy.validate({}) is False

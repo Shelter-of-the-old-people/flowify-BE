@@ -34,7 +34,6 @@ class Settings(BaseSettings):
     NAVER_CLIENT_ID: str = ""
     NAVER_CLIENT_SECRET: str = ""
 
-    SLACK_BOT_TOKEN: str = ""
     NOTION_INTEGRATION_TOKEN: str = ""
     GITHUB_TOKEN: str = ""
 
@@ -53,6 +52,7 @@ class Settings(BaseSettings):
         "env_file": str(BASE_DIR / ".env"),
         "env_file_encoding": "utf-8",
         "env_file_ignore_missing": True,
+        "extra": "ignore",
     }
 
 

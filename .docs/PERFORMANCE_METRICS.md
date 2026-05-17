@@ -134,7 +134,6 @@ async def _trigger_workflow(self, workflow_id: str, ...):
 | GmailService | list_messages, send_message | 15초 |
 | GoogleSheetsService | read_range, write_range | 15초 |
 | GoogleCalendarService | list_events, create_event | 15초 |
-| SlackService | send_message | 10초 |
 | NotionService | create_page | 10초 |
 | WebCrawlerService | crawl | 15초 |
 | OpenAI (LLMService) | chat.completions | 30초 |

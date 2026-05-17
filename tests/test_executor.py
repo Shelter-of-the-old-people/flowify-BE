@@ -744,8 +744,8 @@ class TestLoopExecution:
         assert len(output_input["items"]) == 2
 
     @pytest.mark.asyncio
-    async def test_file_list_loop_keeps_text_aggregate_for_slack_sink(self, mock_db):
-        """FILE_LIST → loop → llm → Slack: FILE_LIST 미지원 sink는 TEXT 집계를 유지합니다."""
+    async def test_file_list_loop_keeps_text_aggregate_for_text_only_sink(self, mock_db):
+        """FILE_LIST → loop → llm → text-only sink는 TEXT 집계를 유지합니다."""
         executor = WorkflowExecutor(mock_db)
 
         async def side_effect(node, input_data, service_tokens):
@@ -772,16 +772,19 @@ class TestLoopExecution:
             NodeDefinition(id="node_3", type="llm", config={}),
             NodeDefinition(
                 id="node_4",
-                type="slack",
+                type="discord",
                 config={},
                 runtime_type="output",
-                runtime_sink={"service": "slack", "config": {"channel": "C123"}},
+                runtime_sink={
+                    "service": "discord",
+                    "config": {"webhook_url": "https://discord.com/api/webhooks/test/token"},
+                },
             ),
         ]
         edges = _make_edges(("node_1", "node_2"), ("node_2", "node_3"), ("node_3", "node_4"))
 
         result = await executor.execute(
-            execution_id="exec_loop_slack",
+            execution_id="exec_loop_text_only",
             workflow_id="wf_1",
             user_id="usr_1",
             nodes=nodes,
