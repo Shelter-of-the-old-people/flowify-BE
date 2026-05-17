@@ -55,6 +55,16 @@ def mock_db() -> MagicMock:
     return db
 
 
+def test_website_feed_is_freshness_node() -> None:
+    node = _source_node(
+        "website_feed",
+        target="",
+        config={"targets": [{"id": "kbs", "url": "https://example.com/rss"}]},
+    )
+
+    assert SourceFreshnessService.is_freshness_node(node) is True
+
+
 @pytest.mark.asyncio
 async def test_first_run_initializes_checkpoint_without_emitting_items(mock_db: MagicMock) -> None:
     """첫 실행은 현재 목록을 기준점으로 저장하고 기존 글을 통과시키지 않습니다."""
@@ -88,6 +98,59 @@ async def test_existing_checkpoint_filters_only_new_items(mock_db: MagicMock) ->
         user_id="user_1",
         workflow_id="workflow_1",
         node=_source_node(),
+        payload=_payload("post_3", "post_2", "post_1"),
+    )
+
+    assert decision.no_new_items is False
+    assert [item["id"] for item in decision.payload["items"]] == ["post_3"]
+    assert decision.payload["metadata"]["freshness"]["status"] == "new_items"
+    assert decision.pending_commit is not None
+    assert decision.pending_commit.document["cursorValue"] == "post_3"
+
+
+@pytest.mark.asyncio
+async def test_website_feed_first_run_initializes_checkpoint(
+    mock_db: MagicMock,
+) -> None:
+    mock_db.source_checkpoints.find_one.return_value = None
+    service = SourceFreshnessService(mock_db)
+
+    decision = await service.filter_output(
+        user_id="user_1",
+        workflow_id="workflow_1",
+        node=_source_node(
+            "website_feed",
+            target="",
+            config={"targets": [{"id": "kbs", "url": "https://example.com/rss"}]},
+        ),
+        payload=_payload("post_2", "post_1"),
+    )
+
+    assert decision.no_new_items is True
+    assert decision.payload["items"] == []
+    assert decision.payload["metadata"]["freshness"]["status"] == "initialized"
+    assert decision.pending_commit is not None
+    assert decision.pending_commit.document["cursorValue"] == "post_2"
+
+
+@pytest.mark.asyncio
+async def test_website_feed_existing_checkpoint_filters_only_new_items(
+    mock_db: MagicMock,
+) -> None:
+    mock_db.source_checkpoints.find_one.return_value = {
+        "cursorValue": "post_2",
+        "seenItemKeys": ["post_2", "post_1"],
+    }
+    service = SourceFreshnessService(mock_db)
+
+    decision = await service.filter_output(
+        user_id="user_1",
+        workflow_id="workflow_1",
+        node=_source_node(
+            "website_feed",
+            target="",
+            config={"targets": [{"id": "kbs", "url": "https://example.com/rss"}]},
+        ),
         payload=_payload("post_3", "post_2", "post_1"),
     )
 
@@ -279,6 +342,81 @@ async def test_keyword_change_updates_checkpoint_hash(mock_db: MagicMock) -> Non
         user_id="user_1",
         workflow_id="workflow_1",
         node=_source_node(config={"keyword": "수강신청"}),
+        payload=_payload("post_1"),
+    )
+
+    assert first_decision.pending_commit is not None
+    assert second_decision.pending_commit is not None
+    assert (
+        first_decision.pending_commit.query["targetHash"]
+        != second_decision.pending_commit.query["targetHash"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_website_feed_targets_change_updates_checkpoint_hash(
+    mock_db: MagicMock,
+) -> None:
+    """Different RSS source selections should use different checkpoints."""
+    mock_db.source_checkpoints.find_one.return_value = None
+    service = SourceFreshnessService(mock_db)
+
+    first_decision = await service.filter_output(
+        user_id="user_1",
+        workflow_id="workflow_1",
+        node=_source_node(
+            "website_feed",
+            target="",
+            config={"targets": [{"id": "kbs", "url": "https://example.com/kbs.xml"}]},
+        ),
+        payload=_payload("post_1"),
+    )
+    second_decision = await service.filter_output(
+        user_id="user_1",
+        workflow_id="workflow_1",
+        node=_source_node(
+            "website_feed",
+            target="",
+            config={"targets": [{"id": "mbc", "url": "https://example.com/mbc.xml"}]},
+        ),
+        payload=_payload("post_1"),
+    )
+
+    assert first_decision.pending_commit is not None
+    assert second_decision.pending_commit is not None
+    assert (
+        first_decision.pending_commit.query["targetHash"]
+        != second_decision.pending_commit.query["targetHash"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_website_feed_keyword_change_updates_checkpoint_hash(
+    mock_db: MagicMock,
+) -> None:
+    """Different RSS keyword filters should use different checkpoints."""
+    mock_db.source_checkpoints.find_one.return_value = None
+    service = SourceFreshnessService(mock_db)
+    targets = [{"id": "kbs", "url": "https://example.com/kbs.xml"}]
+
+    first_decision = await service.filter_output(
+        user_id="user_1",
+        workflow_id="workflow_1",
+        node=_source_node(
+            "website_feed",
+            target="",
+            config={"targets": targets, "keyword": "economy"},
+        ),
+        payload=_payload("post_1"),
+    )
+    second_decision = await service.filter_output(
+        user_id="user_1",
+        workflow_id="workflow_1",
+        node=_source_node(
+            "website_feed",
+            target="",
+            config={"targets": targets, "keyword": "education"},
+        ),
         payload=_payload("post_1"),
     )
 
