@@ -255,7 +255,6 @@ class ConditionNodeStrategy(NodeStrategy):
 | 벡터 스토어 | Chroma | 지식 베이스, 유사도 검색 |
 | DB | MongoDB (Motor) | 비정형 데이터 비동기 접근 |
 | 스케줄링 | APScheduler | 시간 기반 트리거 |
-| 외부 연동 | google-api-python-client, slack-sdk, notion-client | 서비스 API 연동 (요구사항 SFR-03 기준) |
 | 문서 처리 | pdfminer.six, openpyxl, weasyprint | PDF/Excel 파싱 및 생성 |
 | 컨테이너 | Docker | 환경 패키징 |
 | 배포 | Cloudtype | 호스팅 |

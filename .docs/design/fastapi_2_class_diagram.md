@@ -155,7 +155,6 @@ classDiagram
 
     class OutputNodeStrategy {
         -config: dict
-        -SlackService _slack
         -NotionService _notion
         -GmailService _gmail
         -GoogleDriveService _google_drive
@@ -282,7 +281,6 @@ classDiagram
         +async list_calendars(token: str) list
     }
 
-    class SlackService {
         +async send_message(token: str, channel: str, text: str) dict
         +async list_channels(token: str) list
     }
@@ -312,7 +310,6 @@ classDiagram
 | GmailService | `google-api-python-client`, `httpx` | OAuth 2.0 Bearer Token | UC-S01 |
 | GoogleSheetsService | `google-api-python-client`, `httpx` | OAuth 2.0 Bearer Token | UC-S03 |
 | GoogleCalendarService | `google-api-python-client`, `httpx` | OAuth 2.0 Bearer Token | UC-S05 |
-| SlackService | `httpx` | Bot Token (xoxb-) | UC-S01 |
 | NotionService | `httpx` | Integration Token | UC-S02 |
 | WebCrawlerService | `httpx`, `beautifulsoup4` | 없음 (공개 페이지) | UC-S04 |
 | RestAPIService | `httpx` | 호출 시 전달 | - |

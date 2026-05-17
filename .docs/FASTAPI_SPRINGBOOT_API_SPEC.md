@@ -85,7 +85,6 @@ Content-Type: application/json
   },
   "service_tokens": {
     "gmail": "ya29.a0...",
-    "slack": "xoxb-..."
   }
 }
 ```

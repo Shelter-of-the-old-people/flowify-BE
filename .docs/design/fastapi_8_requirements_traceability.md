@@ -26,7 +26,6 @@
 | Google Sheets 데이터 조회 | UC-S03 | InputNodeStrategy, GoogleSheetsService | _fetch_from_google_sheets() | 미구현 |
 | Google Calendar 일정 조회 | UC-S05 | InputNodeStrategy, GoogleCalendarService | _fetch_from_google_calendar() | 미구현 |
 | 웹 크롤링 (쿠팡, 네이버 등) | UC-S04 | InputNodeStrategy, WebCrawlerService | _fetch_from_web_crawl() | 미구현 |
-| Slack 메시지 전송 | UC-S01 | OutputNodeStrategy, SlackService | _send_to_slack() | 미구현 |
 | Notion 페이지 생성 | UC-S02 | OutputNodeStrategy, NotionService | _send_to_notion() | 미구현 |
 | Gmail 메일 전송 | UC-S01 | OutputNodeStrategy, GmailService | _send_to_gmail() | 미구현 |
 | Google Sheets 데이터 작성 | UC-S03 | OutputNodeStrategy, GoogleSheetsService | _write_to_google_sheets() | 미구현 |
@@ -126,7 +125,6 @@
 |----------|-----------|-------------|------|
 | FT-S01 | Google Drive 파일 수집 | GoogleDriveService | Placeholder |
 | FT-S01-GM | Gmail 메일 수집 | GmailService | 미구현 |
-| FT-S02 | Slack 메시지 전송 | SlackService | 미구현 |
 | FT-S03 | Notion 페이지 생성 | NotionService | 미구현 |
 | FT-S04 | 웹 크롤링 | WebCrawlerService | 미구현 |
 | FT-S05 | Google Sheets 데이터 조회/작성 | GoogleSheetsService | 미구현 |
@@ -157,7 +155,6 @@
 | PK-F03 | DC-F0302 | SchedulerService | `app/services/scheduler_service.py` |
 | PK-F03 | DC-F0303 | VectorService | `app/services/vector_service.py` |
 | PK-F04 | DC-F0401 | GoogleDriveService | `app/services/integrations/google_drive.py` |
-| PK-F04 | DC-F0402 | SlackService | `app/services/integrations/slack.py` (신규) |
 | PK-F04 | DC-F0403 | NotionService | `app/services/integrations/notion.py` (신규) |
 | PK-F04 | DC-F0404 | WebCrawlerService | `app/services/integrations/web_crawler.py` (신규) |
 | PK-F04 | DC-F0405 | RestAPIService | `app/services/integrations/rest_api.py` |

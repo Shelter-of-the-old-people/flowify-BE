@@ -231,14 +231,12 @@ from app.common.errors import FlowifyException
 
 
 @pytest.mark.asyncio
-async def test_slack_send():
     node = OutputNodeStrategy({})
     node_dict = {
         "runtime_sink": {"service": "slack", "config": {"channel": "#test"}}
     }
     service_tokens = {"slack": "fake_token"}
     input_data = {"type": "TEXT", "content": "Hello Slack"}
-    with patch("app.core.nodes.output_node.SlackService") as MockSlack:
         mock_svc = MockSlack.return_value
         mock_svc.send_message = AsyncMock(return_value={"ok": True})
         result = await node.execute(node_dict, input_data, service_tokens)
@@ -291,7 +289,6 @@ v2 컨트랙트에서 `service_tokens`는 **서비스 타입을 키로 사용**:
 {
   "google_drive": "ya29.xxx",
   "gmail": "ya29.xxx",
-  "slack": "xoxb-xxx",
   "notion": "ntn_xxx"
 }
 ```

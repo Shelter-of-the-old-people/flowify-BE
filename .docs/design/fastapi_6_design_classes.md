@@ -379,7 +379,6 @@
 |----------|--------|---------|--------|------|
 | execute | public async | input_data: dict | dict | config.target에 따라 외부 서비스로 데이터 전송 |
 | validate | public | - | bool | target 필드 존재 확인 |
-| _send_to_slack | private async | token: str, channel: str, message: str | dict | SlackService.send_message |
 | _send_to_notion | private async | token: str, page_id: str, content: str | dict | NotionService.create_page |
 | _send_to_gmail | private async | token: str, to: str, subject: str, body: str | dict | Gmail API 전송 |
 | _send_to_google_sheets | private async | token: str, spreadsheet_id: str, data: list | dict | Google Sheets 데이터 작성 |
@@ -388,7 +387,6 @@
 
 | config.target | 호출 서비스 | 관련 UC |
 |---------------|-----------|---------|
-| `slack` | SlackService | UC-S01 |
 | `notion` | NotionService | UC-S02 |
 | `gmail` | GmailService | UC-S01 |
 | `google_sheets` | GoogleSheetsService | UC-S03 |
@@ -497,12 +495,10 @@
 
 ---
 
-### DC-F0402: SlackService
 
 | 항목 | 내용 |
 |------|------|
 | **클래스 식별자** | DC-F0402 |
-| **클래스 명** | SlackService |
 | **파일 위치** | `app/services/integrations/slack.py` (신규) |
 
 **메소드:**
