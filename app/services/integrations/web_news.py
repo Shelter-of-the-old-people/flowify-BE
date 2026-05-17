@@ -52,6 +52,8 @@ class WebNewsService:
                 limit=normalized_limit,
                 include_content=include_content,
             )
+            unfiltered_count = len(items)
+            items = self._filter_items_by_keyword(items, keyword)
             return {
                 "type": "ARTICLE_LIST",
                 "items": items,
@@ -60,6 +62,9 @@ class WebNewsService:
                     "count": len(items),
                     "truncated": feed_metadata.get("source_count", len(items)) > len(items),
                     "include_content": include_content,
+                    "keyword": keyword,
+                    "unfiltered_count": unfiltered_count,
+                    "filtered_count": len(items),
                     **feed_metadata,
                 },
             }
@@ -76,6 +81,7 @@ class WebNewsService:
         *,
         limit: int = DEFAULT_LIMIT,
         include_content: bool = False,
+        keyword: str | None = None,
     ) -> dict[str, Any]:
         if mode != "website_feed":
             raise FlowifyException(
@@ -129,7 +135,9 @@ class WebNewsService:
                 context={"failed_sources": failed_sources},
             )
 
-        deduped_items, deduped_count = self._dedupe_items(all_items)
+        unfiltered_count = len(all_items)
+        filtered_items = self._filter_items_by_keyword(all_items, keyword)
+        deduped_items, deduped_count = self._dedupe_items(filtered_items)
         sorted_items = self._sort_items(deduped_items)
         limited_items = sorted_items[:normalized_limit]
 
@@ -146,6 +154,9 @@ class WebNewsService:
                 "deduped_count": deduped_count,
                 "truncated": len(sorted_items) > len(limited_items),
                 "include_content": include_content,
+                "keyword": keyword,
+                "unfiltered_count": unfiltered_count,
+                "filtered_count": len(filtered_items),
             },
         }
 
@@ -161,6 +172,32 @@ class WebNewsService:
             if str(target).strip()
         ]
         return list(dict.fromkeys(normalized))
+
+    @classmethod
+    def _filter_items_by_keyword(
+        cls,
+        items: list[dict[str, Any]],
+        keyword: str | None,
+    ) -> list[dict[str, Any]]:
+        tokens = cls._keyword_tokens(keyword)
+        if not tokens:
+            return items
+
+        return [item for item in items if cls._matches_any_keyword(item, tokens)]
+
+    @staticmethod
+    def _keyword_tokens(keyword: str | None) -> list[str]:
+        if not keyword:
+            return []
+
+        return [token.strip().casefold() for token in keyword.split(",") if token.strip()]
+
+    @staticmethod
+    def _matches_any_keyword(item: dict[str, Any], tokens: list[str]) -> bool:
+        haystack = " ".join(
+            str(item.get(key) or "") for key in ("title", "summary", "content")
+        ).casefold()
+        return any(token in haystack for token in tokens)
 
     @staticmethod
     def _with_source_metadata(

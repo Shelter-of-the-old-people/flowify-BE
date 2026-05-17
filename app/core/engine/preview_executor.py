@@ -433,6 +433,7 @@ class WorkflowPreviewExecutor:
                     targets,
                     limit=limit,
                     include_content=include_content,
+                    keyword=self._source_keyword(config),
                 )
 
         return await svc.fetch_articles(

@@ -665,6 +665,7 @@ class InputNodeStrategy(NodeStrategy):
         svc = WebNewsService()
         fetch_mode = "seboard_posts" if mode == "seboard_new_posts" else mode
         include_content = bool(config.get("includeContent") or config.get("include_content"))
+        keyword = self._source_keyword(config)
         if fetch_mode == "website_feed":
             targets = self._resolve_web_news_targets(target, config)
             if len(targets) > 1:
@@ -673,6 +674,7 @@ class InputNodeStrategy(NodeStrategy):
                     targets,
                     limit=self._resolve_article_limit(config),
                     include_content=include_content,
+                    keyword=keyword,
                 )
 
         return await svc.fetch_articles(
@@ -680,6 +682,7 @@ class InputNodeStrategy(NodeStrategy):
             target,
             limit=self._resolve_article_limit(config),
             include_content=include_content,
+            keyword=keyword,
         )
 
     @staticmethod
@@ -697,6 +700,15 @@ class InputNodeStrategy(NodeStrategy):
             targets = [target.strip()]
 
         return list(dict.fromkeys(targets))
+
+    @staticmethod
+    def _source_keyword(config: dict[str, Any]) -> str | None:
+        value = config.get("keyword")
+        if not isinstance(value, str):
+            return None
+
+        keyword = value.strip()
+        return keyword or None
 
     @staticmethod
     def _resolve_article_limit(config: dict[str, Any]) -> int:
