@@ -16,12 +16,14 @@ FRESHNESS_SOURCE_MODES = frozenset(
     {
         ("naver_news", "new_articles"),
         ("web_news", "seboard_new_posts"),
+        ("web_news", "website_feed"),
     }
 )
 MAX_SEEN_ITEM_KEYS = 200
 CHECKPOINT_CONFIG_KEY_ALLOWLIST: dict[tuple[str, str], frozenset[str]] = {
     ("naver_news", "new_articles"): frozenset(),
     ("web_news", "seboard_new_posts"): frozenset({"keyword"}),
+    ("web_news", "website_feed"): frozenset({"keyword", "targets"}),
 }
 
 

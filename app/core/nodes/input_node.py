@@ -113,7 +113,11 @@ class InputNodeStrategy(NodeStrategy):
         if service == "naver_news":
             return await self._fetch_naver_news(mode, target, config)
         if service == "web_news":
-            return await self._fetch_web_news(mode, target, config)
+            return await self._fetch_web_news(
+                mode,
+                target,
+                {**runtime_source_config, **config},
+            )
 
         raise FlowifyException(
             ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
@@ -660,12 +664,51 @@ class InputNodeStrategy(NodeStrategy):
     ) -> dict[str, Any]:
         svc = WebNewsService()
         fetch_mode = "seboard_posts" if mode == "seboard_new_posts" else mode
+        include_content = bool(config.get("includeContent") or config.get("include_content"))
+        keyword = self._source_keyword(config)
+        if fetch_mode == "website_feed":
+            targets = self._resolve_web_news_targets(target, config)
+            if len(targets) > 1:
+                return await svc.fetch_articles_from_sources(
+                    fetch_mode,
+                    targets,
+                    limit=self._resolve_article_limit(config),
+                    include_content=include_content,
+                    keyword=keyword,
+                )
+
         return await svc.fetch_articles(
             fetch_mode,
             target,
             limit=self._resolve_article_limit(config),
-            include_content=bool(config.get("includeContent") or config.get("include_content")),
+            include_content=include_content,
+            keyword=keyword,
         )
+
+    @staticmethod
+    def _resolve_web_news_targets(target: str, config: dict[str, Any]) -> list[str]:
+        raw_targets = config.get("targets")
+        targets = []
+        if isinstance(raw_targets, list):
+            targets = [
+                str(value).strip()
+                for value in raw_targets
+                if str(value).strip()
+            ]
+
+        if not targets and target:
+            targets = [target.strip()]
+
+        return list(dict.fromkeys(targets))
+
+    @staticmethod
+    def _source_keyword(config: dict[str, Any]) -> str | None:
+        value = config.get("keyword")
+        if not isinstance(value, str):
+            return None
+
+        keyword = value.strip()
+        return keyword or None
 
     @staticmethod
     def _resolve_article_limit(config: dict[str, Any]) -> int:

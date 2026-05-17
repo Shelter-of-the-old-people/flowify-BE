@@ -421,6 +421,50 @@ async def test_web_news_website_feed_preview_returns_article_list_without_token(
     )
 
 
+async def test_web_news_website_feed_preview_passes_keyword_to_multiple_sources() -> None:
+    executor = WorkflowPreviewExecutor()
+    node = _source_node(
+        "web_news",
+        "website_feed",
+        "https://a.example.com",
+        config={
+            "keyword": " 교육 ",
+            "targets": [
+                "https://a.example.com",
+                "https://b.example.com",
+            ],
+        },
+    )
+
+    with patch("app.core.engine.preview_executor.WebNewsService") as mock_web_news_class:
+        mock_web_news = mock_web_news_class.return_value
+        mock_web_news.fetch_articles_from_sources = AsyncMock(
+            return_value={
+                "type": "ARTICLE_LIST",
+                "items": [{"id": "post-1", "title": "교육 소식"}],
+                "metadata": {"provider": "rss", "count": 1},
+            }
+        )
+
+        response = await executor.preview_node(
+            workflow_id="wf1",
+            node_id="node_source",
+            nodes=[node],
+            service_tokens={},
+            limit=5,
+            include_content=False,
+        )
+
+    assert response.available is True
+    mock_web_news.fetch_articles_from_sources.assert_awaited_once_with(
+        "website_feed",
+        ["https://a.example.com", "https://b.example.com"],
+        limit=5,
+        include_content=False,
+        keyword="교육",
+    )
+
+
 async def test_web_news_new_posts_preview_reuses_seboard_fetch() -> None:
     executor = WorkflowPreviewExecutor()
     node = _source_node("web_news", "seboard_new_posts", "2")
