@@ -525,6 +525,41 @@ async def test_web_news_website_feed_runs_without_token() -> None:
     )
 
 
+async def test_web_news_website_feed_uses_multiple_targets() -> None:
+    """website_feed source uses targets config when multiple sources are selected."""
+    strategy = InputNodeStrategy({})
+    node = _source_node("web_news", "website_feed", "https://a.example.com")
+    node["config"] = {
+        "maxResults": 3,
+        "targets": [
+            "https://a.example.com",
+            "https://b.example.com",
+            "https://a.example.com",
+        ],
+    }
+
+    with patch("app.core.nodes.input_node.WebNewsService") as mock_web_news_class:
+        mock_web_news = mock_web_news_class.return_value
+        mock_web_news.fetch_articles_from_sources = AsyncMock(
+            return_value={
+                "type": "ARTICLE_LIST",
+                "items": [{"id": "post-1", "title": "Merged"}],
+                "metadata": {"provider": "rss", "count": 1},
+            }
+        )
+
+        result = await strategy.execute(node, None, {})
+
+    assert result["type"] == "ARTICLE_LIST"
+    mock_web_news.fetch_articles_from_sources.assert_awaited_once_with(
+        "website_feed",
+        ["https://a.example.com", "https://b.example.com"],
+        limit=3,
+        include_content=False,
+    )
+    mock_web_news.fetch_articles.assert_not_called()
+
+
 async def test_naver_news_article_search_runs_without_token() -> None:
     """naver_news source returns ARTICLE_LIST without OAuth token."""
     strategy = InputNodeStrategy({})

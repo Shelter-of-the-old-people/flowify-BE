@@ -425,6 +425,16 @@ class WorkflowPreviewExecutor:
     ) -> dict[str, Any]:
         svc = WebNewsService()
         fetch_mode = "seboard_posts" if mode == "seboard_new_posts" else mode
+        if fetch_mode == "website_feed":
+            targets = self._resolve_web_news_targets(target, config)
+            if len(targets) > 1:
+                return await svc.fetch_articles_from_sources(
+                    fetch_mode,
+                    targets,
+                    limit=limit,
+                    include_content=include_content,
+                )
+
         return await svc.fetch_articles(
             fetch_mode,
             target,
@@ -456,6 +466,22 @@ class WorkflowPreviewExecutor:
 
         keyword = value.strip()
         return keyword or None
+
+    @staticmethod
+    def _resolve_web_news_targets(target: str, config: dict[str, Any]) -> list[str]:
+        raw_targets = config.get("targets")
+        targets = []
+        if isinstance(raw_targets, list):
+            targets = [
+                str(value).strip()
+                for value in raw_targets
+                if str(value).strip()
+            ]
+
+        if not targets and target:
+            targets = [target.strip()]
+
+        return list(dict.fromkeys(targets))
 
     @staticmethod
     def _find_node(nodes: list[NodeDefinition], node_id: str) -> NodeDefinition:
