@@ -84,7 +84,6 @@ def service_tokens() -> dict:
     """테스트용 서비스 토큰 딕셔너리."""
     return {
         "gmail": "test_gmail_token",
-        "slack": "test_slack_token",
         "notion": "test_notion_token",
         "google_drive": "test_drive_token",
         "google_sheets": "test_sheets_token",

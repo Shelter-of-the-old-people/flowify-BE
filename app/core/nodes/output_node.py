@@ -25,7 +25,6 @@ from app.services.integrations.google_calendar import GoogleCalendarService
 from app.services.integrations.google_drive import GoogleDriveService
 from app.services.integrations.google_sheets import GoogleSheetsService
 from app.services.integrations.notion import NotionService
-from app.services.integrations.slack import SlackService
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +32,6 @@ DISCORD_MESSAGE_LIMIT = 2000
 DISCORD_TRUNCATION_SUFFIX = "\n\n... (Discord 메시지 길이 제한으로 일부 내용이 생략되었습니다)"
 
 SUPPORTED_SINKS = {
-    "slack",
     "gmail",
     "notion",
     "google_drive",
@@ -44,7 +42,6 @@ SUPPORTED_SINKS = {
 TOKENLESS_SINKS = {"discord"}
 
 ACCEPTED_INPUT_TYPES: dict[str, set[str]] = {
-    "slack": {"TEXT"},
     "gmail": {"TEXT", "SINGLE_FILE", "FILE_LIST"},
     "notion": {"TEXT", "SPREADSHEET_DATA", "API_RESPONSE"},
     "google_drive": {"TEXT", "SINGLE_FILE", "FILE_LIST", "SPREADSHEET_DATA"},
@@ -54,7 +51,6 @@ ACCEPTED_INPUT_TYPES: dict[str, set[str]] = {
 }
 
 REQUIRED_CONFIG: dict[str, list[str]] = {
-    "slack": ["channel"],
     "gmail": ["to", "subject", "action"],
     "notion": ["target_type", "target_id"],
     "google_drive": ["folder_id"],
@@ -103,9 +99,7 @@ class OutputNodeStrategy(NodeStrategy):
                 detail=f"'{service}' service token is missing.",
             )
 
-        if service == "slack":
-            result = await self._send_slack(token, sink_config, input_data or {})
-        elif service == "gmail":
+        if service == "gmail":
             gmail_config = dict(sink_config)
             runtime_context = node.get("runtime_context")
             if runtime_context is not None:
@@ -143,12 +137,6 @@ class OutputNodeStrategy(NodeStrategy):
         config = rk.get("config", {})
         required = REQUIRED_CONFIG.get(service, [])
         return all(config.get(f) for f in required)
-
-    async def _send_slack(self, token: str, config: dict, input_data: dict) -> dict:
-        channel = config["channel"]
-        message = input_data.get("content", "")
-        svc = SlackService()
-        return await svc.send_message(token, channel, message)
 
     async def _send_discord(self, config: dict, input_data: dict) -> dict:
         webhook_url = str(config.get("webhook_url") or "").strip()

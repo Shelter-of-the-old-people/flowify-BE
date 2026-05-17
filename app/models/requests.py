@@ -14,7 +14,7 @@ class WorkflowExecuteRequest(BaseModel):
     구조:
         {
             "workflow": { ...WorkflowDefinition... },
-            "service_tokens": { "gmail": "ya29...", "slack": "xoxb-..." }
+            "service_tokens": { "gmail": "ya29...", "notion": "secret_..." }
         }
 
     service_tokens 키: runtime_source.service / runtime_sink.service 값

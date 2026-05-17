@@ -130,7 +130,7 @@ class LLMService:
             "    {{\n"
             '      "id": "node_abc12345",\n'
             '      "category": "trigger | service | logic | output",\n'
-            '      "type": "gmail | slack | condition | http_request 등",\n'
+            '      "type": "gmail | notion | condition | http_request 등",\n'
             '      "label": "노드 표시 이름",\n'
             '      "config": {{}},\n'
             '      "position": {{ "x": 0, "y": 0 }},\n'

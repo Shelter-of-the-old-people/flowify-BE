@@ -321,29 +321,18 @@ async def test_gmail_label_emails_uses_configured_max_results(service_tokens: di
     )
 
 
-# ── Slack ────────────────────────────────────────────────────────
+# ── Removed services ─────────────────────────────────────────────
 
 
-async def test_slack_channel_messages(service_tokens: dict) -> None:
-    """Slack 채널 메시지를 TEXT payload로 변환합니다."""
+async def test_removed_slack_source_raises_unsupported() -> None:
+    """기존 workflow에 남은 Slack source는 API 호출 없이 unsupported로 실패합니다."""
     strategy = InputNodeStrategy({})
     node = _source_node("slack", "channel_messages", "C123")
 
-    with patch("app.core.nodes.input_node.SlackService") as mock_slack_class:
-        mock_slack = mock_slack_class.return_value
-        mock_slack._request = AsyncMock(
-            return_value={"messages": [{"text": "hello"}, {"text": "world"}]}
-        )
+    with pytest.raises(FlowifyException) as exc_info:
+        await strategy.execute(node, None, {})
 
-        result = await strategy.execute(node, None, service_tokens)
-
-    assert result == {"type": "TEXT", "content": "hello\nworld"}
-    mock_slack._request.assert_awaited_once_with(
-        "GET",
-        "https://slack.com/api/conversations.history",
-        service_tokens["slack"],
-        params={"channel": "C123", "limit": 20},
-    )
+    assert exc_info.value.error_code == ErrorCode.UNSUPPORTED_RUNTIME_SOURCE
 
 
 # ── Google Sheets ────────────────────────────────────────────────
