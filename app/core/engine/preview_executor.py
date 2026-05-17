@@ -293,19 +293,37 @@ class WorkflowPreviewExecutor:
 
         if mode == "single_email":
             msg = await svc.get_message(token, target)
-            return self._to_single_email(msg, include_content)
+            payload = self._to_single_email(msg, include_content)
+            if include_content:
+                await self._attach_gmail_attachment_text_preview(svc, token, payload["attachments"])
+            return payload
 
         if mode == "new_email":
             msgs = await svc.list_messages(token, query="", max_results=1)
-            return self._to_single_email(msgs[0], include_content) if msgs else self._empty_email()
+            if not msgs:
+                return self._empty_email()
+            payload = self._to_single_email(msgs[0], include_content)
+            if include_content:
+                await self._attach_gmail_attachment_text_preview(svc, token, payload["attachments"])
+            return payload
 
         if mode == "sender_email":
             msgs = await svc.list_messages(token, query=f"from:{target}", max_results=1)
-            return self._to_single_email(msgs[0], include_content) if msgs else self._empty_email()
+            if not msgs:
+                return self._empty_email()
+            payload = self._to_single_email(msgs[0], include_content)
+            if include_content:
+                await self._attach_gmail_attachment_text_preview(svc, token, payload["attachments"])
+            return payload
 
         if mode == "starred_email":
             msgs = await svc.list_messages(token, query="is:starred", max_results=1)
-            return self._to_single_email(msgs[0], include_content) if msgs else self._empty_email()
+            if not msgs:
+                return self._empty_email()
+            payload = self._to_single_email(msgs[0], include_content)
+            if include_content:
+                await self._attach_gmail_attachment_text_preview(svc, token, payload["attachments"])
+            return payload
 
         if mode == "label_emails":
             msgs = await svc.list_messages(
@@ -331,6 +349,8 @@ class WorkflowPreviewExecutor:
             files: list[dict[str, Any]] = []
             for msg in msgs:
                 files.extend(self._to_file_items(msg.get("attachments", [])))
+            if include_content:
+                await self._attach_gmail_attachment_text_preview(svc, token, files)
             return {
                 "type": "FILE_LIST",
                 "files": files,
@@ -545,6 +565,25 @@ class WorkflowPreviewExecutor:
         payload["truncated"] = extraction.get("truncated", False)
 
     @staticmethod
+    async def _attach_gmail_attachment_text_preview(
+        svc: GmailService,
+        token: str,
+        attachments: list[dict[str, Any]],
+    ) -> None:
+        for attachment in attachments:
+            extraction = await svc.extract_attachment_text(
+                token,
+                message_id=attachment.get("message_id") or attachment.get("messageId", ""),
+                attachment_id=attachment.get("attachment_id") or attachment.get("attachmentId", ""),
+                mime_type=attachment.get("mime_type") or attachment.get("mimeType", ""),
+                filename=attachment.get("filename", ""),
+                file_size=attachment.get("size"),
+                inline=bool(attachment.get("inline")),
+            )
+            apply_extraction_to_file_payload(attachment, extraction)
+            attachment["truncated"] = extraction.get("truncated", False)
+
+    @staticmethod
     def _resolve_preview_content_policy(preview_data: Any, include_content: bool) -> str:
         if not include_content:
             return "metadata_only"
@@ -638,8 +677,12 @@ class WorkflowPreviewExecutor:
                 "mime_type": attachment.get("mime_type", attachment.get("mimeType", "")),
                 "size": attachment.get("size"),
                 "source": attachment.get("source", "gmail"),
+                "source_service": attachment.get("source_service", attachment.get("source", "gmail")),
                 "messageId": attachment.get("messageId", ""),
+                "message_id": attachment.get("message_id", attachment.get("messageId", "")),
                 "attachmentId": attachment.get("attachmentId", ""),
+                "attachment_id": attachment.get("attachment_id", attachment.get("attachmentId", "")),
+                "inline": attachment.get("inline", False),
                 "content": attachment.get("content"),
                 "downloadUrl": attachment.get("downloadUrl"),
                 "url": attachment.get("url", ""),

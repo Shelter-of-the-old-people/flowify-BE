@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.config import settings
 from app.services.integrations.gmail import GmailService
 
 
@@ -78,6 +79,116 @@ class TestGmailService:
         assert result["from"] == "김민호 <sender@test.com>"
         assert result["sender"] == "김민호 <sender@test.com>"
         assert result["to"] == ["me@test.com"]
+
+    @pytest.mark.asyncio
+    async def test_get_message_marks_attachment_metadata(self, gmail):
+        with patch.object(gmail, "_request", new_callable=AsyncMock) as mock_req:
+            mock_req.return_value = {
+                "id": "msg_1",
+                "payload": {
+                    "headers": [],
+                    "parts": [
+                        {
+                            "filename": "report.pdf",
+                            "mimeType": "application/pdf",
+                            "headers": [
+                                {
+                                    "name": "Content-Disposition",
+                                    "value": 'attachment; filename="report.pdf"',
+                                }
+                            ],
+                            "body": {"attachmentId": "att_1", "size": 123},
+                        },
+                        {
+                            "filename": "logo.png",
+                            "mimeType": "image/png",
+                            "headers": [
+                                {
+                                    "name": "Content-Disposition",
+                                    "value": 'inline; filename="logo.png"',
+                                }
+                            ],
+                            "body": {"attachmentId": "att_inline", "size": 10},
+                        },
+                    ],
+                },
+            }
+
+            result = await gmail.get_message("token", "msg_1")
+
+        assert result["attachments"][0]["source_service"] == "gmail"
+        assert result["attachments"][0]["message_id"] == "msg_1"
+        assert result["attachments"][0]["attachment_id"] == "att_1"
+        assert result["attachments"][0]["inline"] is False
+        assert result["attachments"][1]["inline"] is True
+
+    @pytest.mark.asyncio
+    async def test_download_attachment_bytes_decodes_base64url(self, gmail):
+        encoded = base64.urlsafe_b64encode("본문".encode()).decode().rstrip("=")
+        with patch.object(gmail, "_request", new_callable=AsyncMock, return_value={"data": encoded}):
+            result = await gmail.download_attachment_bytes("token", "msg_1", "att_1")
+
+        assert result == "본문".encode()
+
+    @pytest.mark.asyncio
+    async def test_extract_attachment_text_disabled_does_not_download(self, gmail):
+        with patch.object(gmail, "download_attachment_bytes", new_callable=AsyncMock) as mock_download:
+            result = await gmail.extract_attachment_text(
+                "token",
+                message_id="msg_1",
+                attachment_id="att_1",
+                mime_type="text/plain",
+                filename="note.txt",
+            )
+
+        assert result["content_status"] == "unsupported"
+        assert result["content_metadata"]["source_service"] == "gmail"
+        assert result["content_metadata"]["message_id"] == "msg_1"
+        assert result["content_metadata"]["attachment_id"] == "att_1"
+        mock_download.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_extract_attachment_text_uses_common_extractor(self, gmail, monkeypatch):
+        monkeypatch.setattr(settings, "ENABLE_GMAIL_ATTACHMENT_EXTRACTION", True)
+
+        with (
+            patch.object(gmail, "download_attachment_bytes", new_callable=AsyncMock, return_value=b"hello"),
+            patch(
+                "app.services.integrations.google_drive.GoogleDriveService.extract_file_text_from_bytes",
+                new_callable=AsyncMock,
+                return_value={
+                    "content": "hello",
+                    "text": "hello",
+                    "status": "success",
+                    "content_status": "available",
+                    "content_error": None,
+                    "content_metadata": {"extraction_method": "plain_text"},
+                },
+            ) as mock_extract,
+        ):
+            result = await gmail.extract_attachment_text(
+                "token",
+                message_id="msg_1",
+                attachment_id="att_1",
+                mime_type="text/plain",
+                filename="note.txt",
+                file_size=5,
+            )
+
+        assert result["content"] == "hello"
+        mock_extract.assert_awaited_once_with(
+            b"hello",
+            "text/plain",
+            filename="note.txt",
+            file_size=5,
+            extraction_action=None,
+            metadata={
+                "source_service": "gmail",
+                "message_id": "msg_1",
+                "attachment_id": "att_1",
+                "inline": False,
+            },
+        )
 
     @pytest.mark.asyncio
     async def test_send_message(self, gmail):

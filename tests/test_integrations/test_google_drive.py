@@ -4,6 +4,7 @@ from zipfile import ZipFile
 
 import pytest
 
+from app.config import settings
 from app.services.integrations.google_drive import (
     DRIVE_API,
     DRIVE_FOLDER_MIME_TYPE,
@@ -195,6 +196,112 @@ async def test_extract_file_text_returns_unsupported_for_scanned_pdf_without_tex
 
     assert result["content_status"] == "unsupported"
     assert result["content_error"] == "이 파일 형식은 아직 본문 읽기를 지원하지 않습니다."
+
+
+@pytest.mark.asyncio
+async def test_extract_file_text_returns_unsupported_for_image_when_provider_disabled() -> None:
+    service = GoogleDriveService()
+    png_header = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8 + (10).to_bytes(4, "big") + (20).to_bytes(4, "big")
+
+    with patch.object(
+        service,
+        "download_file_bytes",
+        new_callable=AsyncMock,
+        return_value=png_header,
+    ):
+        result = await service.extract_file_text(
+            "token",
+            "file_image",
+            "image/png",
+            "capture.png",
+        )
+
+    assert result["content_status"] == "unsupported"
+    assert result["content_metadata"]["image_width"] == 10
+    assert result["content_metadata"]["image_height"] == 20
+    assert result["content_metadata"]["languages"] == ["ko", "en"]
+
+
+@pytest.mark.asyncio
+async def test_extract_file_text_uses_vision_provider_for_ocr_action(monkeypatch) -> None:
+    service = GoogleDriveService()
+    monkeypatch.setattr(settings, "ENABLE_IMAGE_OCR", True)
+    monkeypatch.setattr(settings, "LLM_API_KEY", "test-key")
+    png_header = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8 + (10).to_bytes(4, "big") + (20).to_bytes(4, "big")
+
+    with (
+        patch.object(
+            service,
+            "download_file_bytes",
+            new_callable=AsyncMock,
+            return_value=png_header,
+        ),
+        patch("app.services.llm_service.LLMService") as mock_llm_class,
+    ):
+        mock_llm = mock_llm_class.return_value
+        mock_llm.analyze_image = AsyncMock(return_value="이미지 글자")
+
+        result = await service.extract_file_text(
+            "token",
+            "file_image",
+            "image/png",
+            "capture.png",
+            extraction_action="ocr",
+        )
+
+    assert result["content_status"] == "available"
+    assert result["content"] == "이미지 글자"
+    assert result["content_metadata"]["extraction_method"] == "ocr"
+    assert result["content_metadata"]["content_kind"] == "ocr_text"
+    assert result["content_metadata"]["provider"] == "openai_vision"
+
+
+@pytest.mark.asyncio
+async def test_scan_pdf_ocr_page_limit_returns_too_large(monkeypatch) -> None:
+    service = GoogleDriveService()
+    monkeypatch.setattr(settings, "ENABLE_PDF_OCR", True)
+    monkeypatch.setattr(settings, "MAX_OCR_PAGES", 10)
+
+    with (
+        patch.object(service, "download_file_bytes", new_callable=AsyncMock, return_value=b"%PDF"),
+        patch.object(GoogleDriveService, "_extract_pdf_text", return_value=""),
+        patch.object(GoogleDriveService, "_pdf_page_count", return_value=11),
+    ):
+        result = await service.extract_file_text(
+            "token",
+            "file_pdf",
+            "application/pdf",
+            "scan.pdf",
+        )
+
+    assert result["content_status"] == "too_large"
+    assert result["content_metadata"]["page_count"] == 11
+    assert result["content_metadata"]["limits"]["max_ocr_pages"] == 10
+    assert result["content_metadata"]["limits"]["observed_page_count"] == 11
+
+
+@pytest.mark.asyncio
+async def test_scan_pdf_ocr_returns_unsupported_when_image_ocr_disabled(monkeypatch) -> None:
+    service = GoogleDriveService()
+    monkeypatch.setattr(settings, "ENABLE_PDF_OCR", True)
+    monkeypatch.setattr(settings, "ENABLE_IMAGE_OCR", False)
+
+    with (
+        patch.object(service, "download_file_bytes", new_callable=AsyncMock, return_value=b"%PDF"),
+        patch.object(GoogleDriveService, "_extract_pdf_text", return_value=""),
+        patch.object(GoogleDriveService, "_pdf_page_count", return_value=1),
+        patch.object(GoogleDriveService, "_render_pdf_pages_to_images", return_value=[b"image"]),
+    ):
+        result = await service.extract_file_text(
+            "token",
+            "file_pdf",
+            "application/pdf",
+            "scan.pdf",
+        )
+
+    assert result["content_status"] == "unsupported"
+    assert result["content_metadata"]["page_count"] == 1
+    assert result["content_metadata"]["ocr_page_count"] == 0
 
 
 @pytest.mark.asyncio

@@ -445,6 +445,67 @@ async def test_extract_text_from_google_drive_file_uses_failure_message():
     assert exc_info.value.error_code == ErrorCode.DOCUMENT_CONTENT_UNSUPPORTED
 
 
+async def test_extract_text_from_gmail_attachment_uses_lazy_extraction():
+    with (
+        patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls,
+        patch("app.core.nodes.llm_node.GmailService") as mock_gmail_cls,
+    ):
+        mock_instance = mock_svc_cls.return_value
+        mock_instance.summarize = AsyncMock(return_value="요약")
+        mock_gmail = mock_gmail_cls.return_value
+        mock_gmail.extract_attachment_text = AsyncMock(
+            return_value={
+                "text": "첨부 본문",
+                "content": "첨부 본문",
+                "status": "success",
+                "content_status": "available",
+                "content_error": None,
+                "content_metadata": {
+                    "extraction_method": "plain_text",
+                    "content_kind": "plain_text",
+                    "truncated": False,
+                },
+            }
+        )
+
+        from app.core.nodes.llm_node import LLMNodeStrategy
+
+        node = LLMNodeStrategy(config={"action": "summarize"})
+        node._llm_service = mock_instance
+
+        await node.execute(
+            node=_node(runtime_config={"action": "summarize"}),
+            input_data={
+                "type": "FILE_LIST",
+                "items": [
+                    {
+                        "source_service": "gmail",
+                        "message_id": "msg_1",
+                        "attachment_id": "att_1",
+                        "filename": "note.txt",
+                        "mime_type": "text/plain",
+                        "content": None,
+                        "content_status": "not_requested",
+                    }
+                ],
+            },
+            service_tokens={"gmail": "token"},
+        )
+
+    call_args = mock_instance.summarize.call_args[0][0]
+    assert "note.txt" in call_args
+    assert "첨부 본문" in call_args
+    mock_gmail.extract_attachment_text.assert_awaited_once_with(
+        "token",
+        message_id="msg_1",
+        attachment_id="att_1",
+        mime_type="text/plain",
+        filename="note.txt",
+        file_size=None,
+        inline=False,
+    )
+
+
 @pytest.mark.parametrize(
     ("filename", "mime_type", "archive_entries", "expected_text"),
     [

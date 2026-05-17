@@ -652,3 +652,66 @@ async def test_gmail_single_email_preview_wraps_email_and_preserves_top_level_al
     assert response.output_data["subject"] == "Subject"
     assert response.output_data["from"] == "sender@example.com"
     mock_gmail.get_message.assert_awaited_once_with("token", "msg_1")
+
+
+async def test_gmail_attachment_preview_extracts_content_when_requested() -> None:
+    executor = WorkflowPreviewExecutor()
+    node = _source_node("gmail", "attachment_email")
+
+    with patch("app.core.engine.preview_executor.GmailService") as mock_gmail_class:
+        mock_gmail = mock_gmail_class.return_value
+        mock_gmail.list_messages = AsyncMock(
+            return_value=[
+                {
+                    "id": "msg_1",
+                    "attachments": [
+                        {
+                            "id": "gmail-msg_1:att_1",
+                            "filename": "note.txt",
+                            "mime_type": "text/plain",
+                            "size": 5,
+                            "source": "gmail",
+                            "source_service": "gmail",
+                            "message_id": "msg_1",
+                            "attachment_id": "att_1",
+                            "inline": False,
+                        }
+                    ],
+                }
+            ]
+        )
+        mock_gmail.extract_attachment_text = AsyncMock(
+            return_value={
+                "text": "첨부 본문",
+                "content": "첨부 본문",
+                "status": "success",
+                "content_status": "available",
+                "content_error": None,
+                "content_metadata": {
+                    "extraction_method": "plain_text",
+                    "content_kind": "plain_text",
+                    "truncated": False,
+                },
+            }
+        )
+
+        response = await executor.preview_node(
+            workflow_id="wf1",
+            node_id="node_source",
+            nodes=[node],
+            service_tokens={"gmail": "token"},
+            limit=5,
+            include_content=True,
+        )
+
+    assert response.metadata["content_policy"] == "content_included"
+    assert response.output_data["items"][0]["content"] == "첨부 본문"
+    mock_gmail.extract_attachment_text.assert_awaited_once_with(
+        "token",
+        message_id="msg_1",
+        attachment_id="att_1",
+        mime_type="text/plain",
+        filename="note.txt",
+        file_size=5,
+        inline=False,
+    )

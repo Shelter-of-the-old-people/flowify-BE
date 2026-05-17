@@ -13,6 +13,7 @@ from app.core.document_content import (
     apply_extraction_to_file_payload,
 )
 from app.core.nodes.base import NodeStrategy
+from app.services.integrations.gmail import GmailService
 from app.services.integrations.google_drive import GoogleDriveService
 from app.services.llm_service import LLMService
 
@@ -73,6 +74,7 @@ class LLMNodeStrategy(NodeStrategy):
             input_data,
             service_tokens,
             requires_content=requires_content,
+            content_action=action,
         )
 
         if output_data_type == "SPREADSHEET_DATA":
@@ -132,6 +134,7 @@ class LLMNodeStrategy(NodeStrategy):
         input_data: dict | None,
         service_tokens: dict[str, str],
         requires_content: bool = False,
+        content_action: str | None = None,
     ) -> str:
         if not input_data:
             return ""
@@ -141,6 +144,7 @@ class LLMNodeStrategy(NodeStrategy):
                 input_data,
                 service_tokens,
                 requires_content=requires_content,
+                content_action=content_action,
             )
 
         if input_data.get("type") == "FILE_LIST":
@@ -148,6 +152,7 @@ class LLMNodeStrategy(NodeStrategy):
                 input_data,
                 service_tokens,
                 requires_content=requires_content,
+                content_action=content_action,
             )
 
         return self._extract_text_from_canonical(input_data)
@@ -157,6 +162,7 @@ class LLMNodeStrategy(NodeStrategy):
         input_data: dict[str, Any],
         service_tokens: dict[str, str],
         requires_content: bool = False,
+        content_action: str | None = None,
     ) -> str:
         content = input_data.get("content")
         if content:
@@ -178,12 +184,51 @@ class LLMNodeStrategy(NodeStrategy):
             token = service_tokens.get("google_drive", "")
             if token:
                 svc = GoogleDriveService()
+                extraction_kwargs = {}
+                if content_action in {"ocr", "describe_image", "ai_analyze"}:
+                    extraction_kwargs["extraction_action"] = content_action
                 extraction = await svc.extract_file_text(
                     token,
                     input_data["file_id"],
                     input_data.get("mime_type", ""),
                     input_data.get("filename", ""),
                     input_data.get("size"),
+                    **extraction_kwargs,
+                )
+                apply_extraction_to_file_payload(input_data, extraction)
+                if input_data.get("content"):
+                    return self._format_single_file_text(input_data, str(input_data["content"]))
+                if requires_content:
+                    self._raise_content_unavailable(
+                        input_data,
+                        str(input_data.get("content_status") or CONTENT_STATUS_FAILED),
+                    )
+                return self._format_single_file_text(
+                    input_data,
+                    self._format_extraction_failure(extraction),
+                )
+
+        if (
+            (input_data.get("source_service") == "gmail" or input_data.get("source") == "gmail")
+            and (input_data.get("message_id") or input_data.get("messageId"))
+            and (input_data.get("attachment_id") or input_data.get("attachmentId"))
+            and content_status in (None, CONTENT_STATUS_NOT_REQUESTED)
+        ):
+            token = service_tokens.get("gmail", "")
+            if token:
+                extraction_kwargs = {}
+                if content_action in {"ocr", "describe_image", "ai_analyze"}:
+                    extraction_kwargs["extraction_action"] = content_action
+                svc = GmailService()
+                extraction = await svc.extract_attachment_text(
+                    token,
+                    message_id=input_data.get("message_id") or input_data.get("messageId"),
+                    attachment_id=input_data.get("attachment_id") or input_data.get("attachmentId"),
+                    mime_type=input_data.get("mime_type") or input_data.get("mimeType", ""),
+                    filename=input_data.get("filename", ""),
+                    file_size=input_data.get("size"),
+                    inline=bool(input_data.get("inline")),
+                    **extraction_kwargs,
                 )
                 apply_extraction_to_file_payload(input_data, extraction)
                 if input_data.get("content"):
@@ -211,6 +256,7 @@ class LLMNodeStrategy(NodeStrategy):
         input_data: dict[str, Any],
         service_tokens: dict[str, str],
         requires_content: bool = False,
+        content_action: str | None = None,
     ) -> str:
         formatted_items = []
         for item in input_data.get("items", []):
@@ -222,6 +268,7 @@ class LLMNodeStrategy(NodeStrategy):
                 item_payload,
                 service_tokens,
                 requires_content=requires_content,
+                content_action=content_action,
             )
             formatted_items.append(self._format_file_list_item(item_payload))
         return "\n\n---\n\n".join(formatted_items)
@@ -388,6 +435,9 @@ class LLMNodeStrategy(NodeStrategy):
             detail=error or code.message,
             context={
                 "filename": input_data.get("filename", ""),
+                "message_id": input_data.get("message_id") or input_data.get("messageId", ""),
+                "attachment_id": input_data.get("attachment_id")
+                or input_data.get("attachmentId", ""),
                 "content_status": status,
                 "content_error": error,
             },

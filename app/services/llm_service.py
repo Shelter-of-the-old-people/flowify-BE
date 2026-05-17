@@ -1,6 +1,8 @@
 import asyncio
+import base64
 import logging
 
+from langchain_core.messages import HumanMessage
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
@@ -14,8 +16,8 @@ logger = logging.getLogger(__name__)
 class LLMService:
     """LangChain LCEL 기반 LLM 통합 서비스."""
 
-    def __init__(self):
-        self._model_name = settings.LLM_MODEL_NAME
+    def __init__(self, model_name: str | None = None):
+        self._model_name = model_name or settings.LLM_MODEL_NAME
         self._llm = ChatOpenAI(
             model=self._model_name,
             api_key=settings.LLM_API_KEY,
@@ -23,6 +25,25 @@ class LLMService:
             temperature=0.7,
             max_tokens=2048,
         )
+
+    async def analyze_image(self, image_bytes: bytes, mime_type: str, prompt: str) -> str:
+        """Vision-capable model로 이미지 내용을 텍스트로 변환합니다."""
+        encoded = base64.b64encode(image_bytes).decode("ascii")
+        media_type = mime_type or "image/png"
+        message = HumanMessage(
+            content=[
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{media_type};base64,{encoded}"},
+                },
+            ]
+        )
+        result = await self._invoke_direct_with_retry([message])
+        content = getattr(result, "content", result)
+        if isinstance(content, list):
+            return "\n".join(str(part) for part in content if part).strip()
+        return str(content or "").strip()
 
     async def process(self, prompt: str, context: str | None = None) -> str:
         """범용 프롬프트 처리."""
@@ -160,11 +181,19 @@ class LLMService:
 
     async def _invoke_with_retry(self, chain, variables: dict):
         """재시도 로직: Rate Limit 1회, Server Error 2회 지수 백오프."""
+        return await self._invoke_retrying(lambda: chain.ainvoke(variables))
+
+    async def _invoke_direct_with_retry(self, messages: list[HumanMessage]):
+        """단일 model 호출에 기존 재시도 정책을 적용합니다."""
+        return await self._invoke_retrying(lambda: self._llm.ainvoke(messages))
+
+    async def _invoke_retrying(self, invoke):
+        """재시도 로직: Rate Limit 1회, Server Error 2회 지수 백오프."""
         last_error = None
 
         for attempt in range(3):  # 최대 3회 시도 (초기 1 + 재시도 2)
             try:
-                return await chain.ainvoke(variables)
+                return await invoke()
             except Exception as e:
                 last_error = e
                 error_str = str(e).lower()
