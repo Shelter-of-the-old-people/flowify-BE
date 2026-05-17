@@ -4,7 +4,16 @@ from email.message import EmailMessage
 from email.utils import formataddr, getaddresses, parsedate_to_datetime
 import logging
 
-from app.core.document_content import default_file_content_fields
+from app.common.errors import FlowifyException
+from app.config import settings
+from app.core.document_content import (
+    CONTENT_STATUS_FAILED,
+    CONTENT_STATUS_TOO_LARGE,
+    CONTENT_STATUS_UNSUPPORTED,
+    MAX_DOWNLOAD_BYTES,
+    build_extraction_result,
+    default_file_content_fields,
+)
 from app.services.integrations.base import BaseIntegrationService
 
 GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"
@@ -62,6 +71,90 @@ class GmailService(BaseIntegrationService):
             "attachments": self._extract_attachments(payload, message_id),
             "snippet": data.get("snippet", ""),
         }
+
+    async def download_attachment_bytes(
+        self,
+        token: str,
+        message_id: str,
+        attachment_id: str,
+    ) -> bytes:
+        """Download and decode Gmail attachment bytes."""
+        data = await self._request(
+            "GET",
+            f"{GMAIL_API}/messages/{message_id}/attachments/{attachment_id}",
+            token,
+        )
+        encoded = str(data.get("data") or "")
+        if not encoded:
+            return b""
+        padding = "=" * (-len(encoded) % 4)
+        return base64.urlsafe_b64decode((encoded + padding).encode("ascii"))
+
+    async def extract_attachment_text(
+        self,
+        token: str,
+        *,
+        message_id: str,
+        attachment_id: str,
+        mime_type: str,
+        filename: str = "",
+        file_size: int | str | None = None,
+        inline: bool = False,
+        extraction_action: str | None = None,
+    ) -> dict:
+        """Download a Gmail attachment and run it through the common file extractor."""
+        metadata = {
+            "source_service": "gmail",
+            "message_id": message_id,
+            "attachment_id": attachment_id,
+            "inline": inline,
+        }
+        if inline:
+            return build_extraction_result(
+                content_status=CONTENT_STATUS_UNSUPPORTED,
+                content_error="Gmail inline image는 첨부 본문 추출 대상이 아닙니다.",
+                metadata=metadata,
+            )
+        if not settings.ENABLE_GMAIL_ATTACHMENT_EXTRACTION:
+            return build_extraction_result(
+                content_status=CONTENT_STATUS_UNSUPPORTED,
+                content_error="Gmail 첨부파일 본문 추출이 비활성화되어 있습니다.",
+                metadata=metadata,
+            )
+        if not attachment_id:
+            return build_extraction_result(
+                content_status=CONTENT_STATUS_UNSUPPORTED,
+                content_error="Gmail attachment id가 없어 본문을 다운로드할 수 없습니다.",
+                metadata=metadata,
+            )
+        if self._is_size_over_download_limit(file_size):
+            return build_extraction_result(
+                content_status=CONTENT_STATUS_TOO_LARGE,
+                content_error="파일이 현재 처리 가능한 크기를 초과했습니다.",
+                limits={"observed_size_bytes": self._coerce_size(file_size)},
+                metadata=metadata,
+            )
+
+        try:
+            raw = await self.download_attachment_bytes(token, message_id, attachment_id)
+        except FlowifyException:
+            raise
+        except Exception as e:
+            return build_extraction_result(
+                content_status=CONTENT_STATUS_FAILED,
+                content_error=str(e),
+                metadata=metadata,
+            )
+        from app.services.integrations.google_drive import GoogleDriveService
+
+        return await GoogleDriveService.extract_file_text_from_bytes(
+            raw,
+            mime_type,
+            filename=filename,
+            file_size=file_size,
+            extraction_action=extraction_action,
+            metadata=metadata,
+        )
 
     async def send_message(
         self,
@@ -271,6 +364,7 @@ class GmailService(BaseIntegrationService):
             body = part.get("body", {}) or {}
             attachment_id = body.get("attachmentId")
             filename = part.get("filename", "")
+            inline = GmailService._is_inline_part(part)
             if filename or attachment_id:
                 attachment_key = attachment_id or filename or "attachment"
                 url = (
@@ -286,8 +380,12 @@ class GmailService(BaseIntegrationService):
                     "mime_type": part.get("mimeType", ""),
                     "size": body.get("size"),
                     "source": "gmail",
+                    "source_service": "gmail",
                     "messageId": message_id,
+                    "message_id": message_id,
                     "attachmentId": attachment_id or "",
+                    "attachment_id": attachment_id or "",
+                    "inline": inline,
                     "content": None,
                     "downloadUrl": None,
                     "url": url,
@@ -297,6 +395,36 @@ class GmailService(BaseIntegrationService):
             attachments.extend(GmailService._extract_attachments(part, message_id))
 
         return attachments
+
+    @staticmethod
+    def _is_inline_part(part: dict) -> bool:
+        disposition = GmailService._part_header_value(part, "content-disposition").lower()
+        if "inline" in disposition:
+            return True
+        if "attachment" in disposition:
+            return False
+        return str(part.get("mimeType", "")).startswith("image/") and bool(part.get("filename"))
+
+    @staticmethod
+    def _part_header_value(part: dict, header_name: str) -> str:
+        for header in part.get("headers", []) or []:
+            if str(header.get("name", "")).lower() == header_name:
+                return str(header.get("value", ""))
+        return ""
+
+    @staticmethod
+    def _coerce_size(value: int | str | None) -> int | None:
+        if value in (None, ""):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _is_size_over_download_limit(value: int | str | None) -> bool:
+        size = GmailService._coerce_size(value)
+        return size is not None and size > MAX_DOWNLOAD_BYTES
 
     @staticmethod
     def _parse_address_list(raw_value: str) -> list[str]:

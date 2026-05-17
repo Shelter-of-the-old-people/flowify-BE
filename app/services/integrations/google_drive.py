@@ -1,8 +1,8 @@
 import csv
 import io
 import json
-import re
 from pathlib import Path
+import re
 from uuid import uuid4
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZipFile
@@ -10,7 +10,9 @@ from zipfile import BadZipFile, ZipFile
 import httpx
 
 from app.common.errors import ErrorCode, FlowifyException
+from app.config import settings
 from app.core.document_content import (
+    CONTENT_STATUS_EMPTY,
     CONTENT_STATUS_FAILED,
     CONTENT_STATUS_TOO_LARGE,
     CONTENT_STATUS_UNSUPPORTED,
@@ -42,6 +44,8 @@ HWPX_MIME_TYPES = {
     "application/vnd.hancom.hwpx",
     "application/x-hwpx",
 }
+IMAGE_MIME_PREFIXES = ("image/",)
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 EXTRACTION_LIMITS = dict(DEFAULT_CONTENT_LIMITS)
 
 
@@ -143,6 +147,7 @@ class GoogleDriveService(BaseIntegrationService):
         mime_type: str,
         filename: str = "",
         file_size: int | str | None = None,
+        extraction_action: str | None = None,
     ) -> dict:
         """Extract text for LLM input without storing original file bytes."""
         try:
@@ -162,32 +167,12 @@ class GoogleDriveService(BaseIntegrationService):
                     return self._csv_result(text)
                 return self._text_result(text, extraction_method="google_export")
 
-            raw = await self.download_file_bytes(token, file_id)
-            if self._is_size_over_download_limit(len(raw)):
-                return self._too_large_result(len(raw))
-            if self._is_docx_mime_type(mime_type, filename):
-                return self._docx_result(raw)
-            if self._is_pptx_mime_type(mime_type, filename):
-                return self._pptx_result(raw)
-            if self._is_hwpx_mime_type(mime_type, filename):
-                return self._hwpx_result(raw)
-            if self._is_csv_mime_type(mime_type, filename):
-                return self._csv_result(self._decode_text(raw))
-            if self._is_text_mime_type(mime_type):
-                return self._text_result(self._decode_text(raw))
-            if mime_type == "application/pdf":
-                text = self._extract_pdf_text(raw)
-                if not text:
-                    return self._extraction_result(
-                        status="unsupported",
-                        content_status=CONTENT_STATUS_UNSUPPORTED,
-                        error="스캔 PDF/OCR 문서는 아직 지원하지 않습니다.",
-                    )
-                return self._text_result(text, extraction_method="pdf_text")
-            return self._extraction_result(
-                status="unsupported",
-                content_status=CONTENT_STATUS_UNSUPPORTED,
-                error="This file type is not supported for text extraction yet.",
+            return await self.extract_file_text_from_bytes(
+                await self.download_file_bytes(token, file_id),
+                mime_type,
+                filename=filename,
+                file_size=file_size,
+                extraction_action=extraction_action,
             )
         except FlowifyException:
             raise
@@ -196,6 +181,69 @@ class GoogleDriveService(BaseIntegrationService):
                 status="failed",
                 content_status=CONTENT_STATUS_FAILED,
                 error=str(e),
+            )
+
+    @classmethod
+    async def extract_file_text_from_bytes(
+        cls,
+        raw: bytes,
+        mime_type: str,
+        *,
+        filename: str = "",
+        file_size: int | str | None = None,
+        extraction_action: str | None = None,
+        metadata: dict | None = None,
+    ) -> dict:
+        """Extract canonical text from already-downloaded file bytes."""
+        try:
+            if cls._is_size_over_download_limit(file_size):
+                return cls._too_large_result(file_size, metadata=metadata)
+            if cls._is_size_over_download_limit(len(raw)):
+                return cls._too_large_result(len(raw), metadata=metadata)
+
+            if cls._is_docx_mime_type(mime_type, filename):
+                return cls._merge_result_metadata(cls._docx_result(raw), metadata)
+            if cls._is_pptx_mime_type(mime_type, filename):
+                return cls._merge_result_metadata(cls._pptx_result(raw), metadata)
+            if cls._is_hwpx_mime_type(mime_type, filename):
+                return cls._merge_result_metadata(cls._hwpx_result(raw), metadata)
+            if cls._is_csv_mime_type(mime_type, filename):
+                return cls._merge_result_metadata(cls._csv_result(cls._decode_text(raw)), metadata)
+            if cls._is_text_mime_type(mime_type):
+                return cls._merge_result_metadata(cls._text_result(cls._decode_text(raw)), metadata)
+            if mime_type == "application/pdf" or Path(filename or "").suffix.lower() == ".pdf":
+                text = cls._extract_pdf_text(raw)
+                if text:
+                    return cls._merge_result_metadata(
+                        cls._text_result(text, extraction_method="pdf_text"),
+                        metadata,
+                    )
+                return await cls._scan_pdf_ocr_result(
+                    raw,
+                    extraction_action=extraction_action,
+                    metadata=metadata,
+                )
+            if cls._is_image_mime_type(mime_type, filename):
+                return await cls._image_result(
+                    raw,
+                    mime_type,
+                    extraction_action=extraction_action,
+                    metadata=metadata,
+                )
+            return cls._extraction_result(
+                status="unsupported",
+                content_status=CONTENT_STATUS_UNSUPPORTED,
+                error="This file type is not supported for text extraction yet.",
+                metadata=metadata,
+            )
+        except FlowifyException:
+            raise
+        except Exception as e:
+            return cls._extraction_result(
+                status="failed",
+                content_status=CONTENT_STATUS_FAILED,
+                error=str(e),
+                metadata=metadata,
             )
 
     async def _request_bytes(
@@ -354,6 +402,11 @@ class GoogleDriveService(BaseIntegrationService):
         return mime_type in HWPX_MIME_TYPES or Path(filename or "").suffix.lower() == ".hwpx"
 
     @staticmethod
+    def _is_image_mime_type(mime_type: str, filename: str = "") -> bool:
+        suffix = Path(filename or "").suffix.lower()
+        return mime_type.startswith(IMAGE_MIME_PREFIXES) or suffix in IMAGE_SUFFIXES
+
+    @staticmethod
     def _decode_text(raw: bytes) -> str:
         for encoding in ("utf-8-sig", "utf-8", "cp949"):
             try:
@@ -377,14 +430,15 @@ class GoogleDriveService(BaseIntegrationService):
         return size is not None and size > MAX_DOWNLOAD_BYTES
 
     @staticmethod
-    def _too_large_result(size: int | str | None = None) -> dict:
+    def _too_large_result(size: int | str | None = None, metadata: dict | None = None) -> dict:
         size_value = GoogleDriveService._coerce_size(size)
-        metadata = {"observed_size_bytes": size_value} if size_value is not None else None
+        limit_metadata = {"observed_size_bytes": size_value} if size_value is not None else None
         return GoogleDriveService._extraction_result(
             status="failed",
             content_status=CONTENT_STATUS_TOO_LARGE,
             error="파일이 현재 처리 가능한 크기를 초과했습니다.",
-            limits=metadata,
+            limits=limit_metadata,
+            metadata=metadata,
         )
 
     @staticmethod
@@ -508,6 +562,369 @@ class GoogleDriveService(BaseIntegrationService):
         reader = PdfReader(io.BytesIO(raw))
         return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
 
+    @classmethod
+    async def _scan_pdf_ocr_result(
+        cls,
+        raw: bytes,
+        *,
+        extraction_action: str | None = None,
+        metadata: dict | None = None,
+    ) -> dict:
+        page_count = cls._pdf_page_count(raw)
+        ocr_limits = {
+            "max_ocr_pages": settings.MAX_OCR_PAGES,
+            "max_image_pixels": settings.MAX_IMAGE_PIXELS,
+        }
+        scan_metadata = {
+            **(metadata or {}),
+            "page_count": page_count,
+            "ocr_page_count": 0,
+            "image_only_pdf": True,
+        }
+        if not settings.ENABLE_PDF_OCR:
+            return cls._extraction_result(
+                status="unsupported",
+                content_status=CONTENT_STATUS_UNSUPPORTED,
+                error="스캔 PDF/OCR 문서는 아직 지원하지 않습니다.",
+                limits=ocr_limits,
+                metadata=scan_metadata,
+            )
+        if page_count and page_count > settings.MAX_OCR_PAGES:
+            return cls._extraction_result(
+                status="failed",
+                content_status=CONTENT_STATUS_TOO_LARGE,
+                error="PDF OCR 처리 가능한 페이지 수를 초과했습니다.",
+                limits={**ocr_limits, "observed_page_count": page_count},
+                metadata=scan_metadata,
+            )
+
+        rendered_pages = cls._render_pdf_pages_to_images(raw, settings.MAX_OCR_PAGES)
+        if rendered_pages is None:
+            return cls._extraction_result(
+                status="unsupported",
+                content_status=CONTENT_STATUS_UNSUPPORTED,
+                error="스캔 PDF 렌더러가 설정되지 않았습니다.",
+                limits=ocr_limits,
+                metadata=scan_metadata,
+            )
+        if not rendered_pages:
+            return cls._extraction_result(
+                status="failed",
+                content_status=CONTENT_STATUS_FAILED,
+                error="PDF 페이지를 OCR 이미지로 변환하지 못했습니다.",
+                limits=ocr_limits,
+                metadata=scan_metadata,
+            )
+
+        page_texts: list[str] = []
+        failed_pages = 0
+        unsupported_pages = 0
+        for page_index, page_image in enumerate(rendered_pages, start=1):
+            result = await cls._image_result(
+                page_image,
+                "image/png",
+                extraction_action="ocr",
+                metadata={
+                    **(metadata or {}),
+                    "page_number": page_index,
+                    "source_content_kind": "scan_pdf_page",
+                },
+            )
+            if result.get("content"):
+                page_texts.append(f"[Page {page_index}]\n{result['content']}")
+            elif result.get("content_status") == CONTENT_STATUS_FAILED:
+                failed_pages += 1
+            elif result.get("content_status") == CONTENT_STATUS_UNSUPPORTED:
+                unsupported_pages += 1
+
+        scan_metadata["ocr_page_count"] = len(page_texts)
+        if page_texts:
+            scan_metadata["partial"] = failed_pages > 0
+            return cls._text_result(
+                "\n\n".join(page_texts),
+                extraction_method="ocr",
+                content_kind="ocr_text",
+                limits=ocr_limits,
+                metadata=scan_metadata,
+            )
+        if unsupported_pages:
+            return cls._extraction_result(
+                status="unsupported",
+                content_status=CONTENT_STATUS_UNSUPPORTED,
+                error="현재 OCR/이미지 분석을 지원하지 않습니다.",
+                limits=ocr_limits,
+                metadata=scan_metadata,
+            )
+        return cls._extraction_result(
+            status="failed" if failed_pages else "success",
+            content_status=CONTENT_STATUS_FAILED if failed_pages else CONTENT_STATUS_EMPTY,
+            error="PDF OCR 결과에서 읽을 수 있는 텍스트를 찾지 못했습니다.",
+            limits=ocr_limits,
+            metadata=scan_metadata,
+        )
+
+    @staticmethod
+    def _pdf_page_count(raw: bytes) -> int | None:
+        try:
+            from pypdf import PdfReader
+
+            return len(PdfReader(io.BytesIO(raw)).pages)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _render_pdf_pages_to_images(raw: bytes, max_pages: int) -> list[bytes] | None:
+        try:
+            import fitz  # type: ignore[import-not-found]
+        except ModuleNotFoundError:
+            return None
+
+        document = fitz.open(stream=raw, filetype="pdf")
+        images: list[bytes] = []
+        matrix = fitz.Matrix(2, 2)
+        try:
+            for page_index in range(min(len(document), max_pages)):
+                page = document.load_page(page_index)
+                pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+                images.append(pixmap.tobytes("png"))
+        finally:
+            document.close()
+        return images
+
+    @classmethod
+    async def _image_result(
+        cls,
+        raw: bytes,
+        mime_type: str,
+        *,
+        extraction_action: str | None = None,
+        metadata: dict | None = None,
+    ) -> dict:
+        image_metadata = {**(metadata or {})}
+        dimensions = cls._read_image_dimensions(raw, mime_type)
+        if dimensions:
+            width, height = dimensions
+            image_metadata.update({"image_width": width, "image_height": height})
+            if width * height > settings.MAX_IMAGE_PIXELS:
+                return cls._extraction_result(
+                    status="failed",
+                    content_status=CONTENT_STATUS_TOO_LARGE,
+                    error="이미지가 현재 처리 가능한 픽셀 수를 초과했습니다.",
+                    limits={
+                        "max_image_pixels": settings.MAX_IMAGE_PIXELS,
+                        "observed_image_pixels": width * height,
+                    },
+                    metadata=image_metadata,
+                )
+
+        action = (extraction_action or "summarize").lower()
+        if action == "ocr":
+            return await cls._call_image_provider(
+                raw,
+                mime_type,
+                mode="ocr",
+                content_kind="ocr_text",
+                metadata=image_metadata,
+            )
+        if action == "describe_image":
+            return await cls._call_image_provider(
+                raw,
+                mime_type,
+                mode="vision",
+                content_kind="image_description",
+                metadata=image_metadata,
+            )
+        return await cls._mixed_image_result(raw, mime_type, metadata=image_metadata)
+
+    @classmethod
+    async def _mixed_image_result(
+        cls,
+        raw: bytes,
+        mime_type: str,
+        *,
+        metadata: dict,
+    ) -> dict:
+        parts: list[str] = []
+        methods: list[str] = []
+        kinds: list[str] = []
+        providers: list[str] = []
+        results: list[dict] = []
+
+        if settings.ENABLE_IMAGE_OCR:
+            ocr_result = await cls._call_image_provider(
+                raw,
+                mime_type,
+                mode="ocr",
+                content_kind="ocr_text",
+                metadata=metadata,
+            )
+            results.append(ocr_result)
+            if ocr_result.get("content"):
+                parts.append("OCR Text:\n" + str(ocr_result["content"]))
+                methods.append("ocr")
+                kinds.append("ocr_text")
+                providers.append(str(ocr_result.get("content_metadata", {}).get("provider", "")))
+
+        if settings.ENABLE_IMAGE_VISION:
+            vision_result = await cls._call_image_provider(
+                raw,
+                mime_type,
+                mode="vision",
+                content_kind="image_description",
+                metadata=metadata,
+            )
+            results.append(vision_result)
+            if vision_result.get("content"):
+                parts.append("Image Description:\n" + str(vision_result["content"]))
+                methods.append("vision")
+                kinds.append("image_description")
+                providers.append(str(vision_result.get("content_metadata", {}).get("provider", "")))
+
+        if parts:
+            return cls._text_result(
+                "\n\n".join(parts),
+                extraction_method="mixed" if len(parts) > 1 else methods[0],
+                content_kind="mixed" if len(parts) > 1 else kinds[0],
+                metadata={**metadata, "provider": ",".join(sorted(set(filter(None, providers))))},
+            )
+
+        if any(result.get("content_status") == CONTENT_STATUS_FAILED for result in results):
+            return cls._extraction_result(
+                status="failed",
+                content_status=CONTENT_STATUS_FAILED,
+                error="이미지 OCR/분석 중 오류가 발생했습니다.",
+                metadata=metadata,
+            )
+        if any(result.get("content_status") == CONTENT_STATUS_UNSUPPORTED for result in results):
+            return cls._image_provider_unsupported_result(metadata)
+        if results:
+            return cls._extraction_result(
+                status="success",
+                content_status=CONTENT_STATUS_EMPTY,
+                error="이미지에서 읽을 수 있는 텍스트나 설명을 찾지 못했습니다.",
+                metadata=metadata,
+            )
+        return cls._image_provider_unsupported_result(metadata)
+
+    @classmethod
+    async def _call_image_provider(
+        cls,
+        raw: bytes,
+        mime_type: str,
+        *,
+        mode: str,
+        content_kind: str,
+        metadata: dict,
+    ) -> dict:
+        enabled = settings.ENABLE_IMAGE_OCR if mode == "ocr" else settings.ENABLE_IMAGE_VISION
+        provider = settings.OCR_PROVIDER if mode == "ocr" else settings.VISION_PROVIDER
+        if not enabled or provider != "openai_vision" or not settings.LLM_API_KEY:
+            return cls._image_provider_unsupported_result(metadata, provider=provider)
+
+        prompt = cls._image_prompt(mode)
+        try:
+            from app.services.llm_service import LLMService
+
+            model_name = settings.VISION_MODEL_NAME or settings.LLM_MODEL_NAME
+            text = await LLMService(model_name=model_name).analyze_image(raw, mime_type, prompt)
+        except Exception as e:
+            return cls._extraction_result(
+                status="failed",
+                content_status=CONTENT_STATUS_FAILED,
+                error=str(e),
+                extraction_method=mode,
+                content_kind=content_kind,
+                metadata={
+                    **metadata,
+                    "provider": provider,
+                    "languages": cls._ocr_languages(),
+                },
+            )
+
+        return cls._text_result(
+            text,
+            extraction_method=mode,
+            content_kind=content_kind,
+            metadata={
+                **metadata,
+                "provider": provider,
+                "languages": cls._ocr_languages(),
+            },
+        )
+
+    @staticmethod
+    def _image_provider_unsupported_result(
+        metadata: dict | None = None,
+        *,
+        provider: str | None = None,
+    ) -> dict:
+        return GoogleDriveService._extraction_result(
+            status="unsupported",
+            content_status=CONTENT_STATUS_UNSUPPORTED,
+            error="현재 OCR/이미지 분석을 지원하지 않습니다.",
+            metadata={
+                **(metadata or {}),
+                "provider": provider or settings.OCR_PROVIDER or settings.VISION_PROVIDER,
+                "languages": GoogleDriveService._ocr_languages(),
+            },
+        )
+
+    @staticmethod
+    def _image_prompt(mode: str) -> str:
+        languages = ", ".join(GoogleDriveService._ocr_languages())
+        if mode == "ocr":
+            return (
+                "Extract all readable text from this image. "
+                f"Prefer Korean and English text when present ({languages}). "
+                "Return only the extracted text, preserving line breaks when useful."
+            )
+        return (
+            "Describe the important visual content of this image for a workflow automation user. "
+            f"If readable Korean or English text is visible ({languages}), include the key text."
+        )
+
+    @staticmethod
+    def _ocr_languages() -> list[str]:
+        values = [value.strip() for value in settings.OCR_LANGUAGES.split(",")]
+        return [value for value in values if value] or ["ko", "en"]
+
+    @staticmethod
+    def _read_image_dimensions(raw: bytes, mime_type: str) -> tuple[int, int] | None:
+        if mime_type == "image/png" or raw.startswith(b"\x89PNG\r\n\x1a\n"):
+            if len(raw) >= 24:
+                return int.from_bytes(raw[16:20], "big"), int.from_bytes(raw[20:24], "big")
+            return None
+        if mime_type == "image/bmp" or raw.startswith(b"BM"):
+            if len(raw) >= 26:
+                return int.from_bytes(raw[18:22], "little"), int.from_bytes(raw[22:26], "little")
+            return None
+        if mime_type in {"image/jpeg", "image/jpg"} or raw.startswith(b"\xff\xd8"):
+            return GoogleDriveService._read_jpeg_dimensions(raw)
+        return None
+
+    @staticmethod
+    def _read_jpeg_dimensions(raw: bytes) -> tuple[int, int] | None:
+        index = 2
+        while index + 9 < len(raw):
+            if raw[index] != 0xFF:
+                index += 1
+                continue
+            marker = raw[index + 1]
+            index += 2
+            if marker in {0xD8, 0xD9}:
+                continue
+            if index + 2 > len(raw):
+                return None
+            segment_length = int.from_bytes(raw[index : index + 2], "big")
+            if marker in {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB}:
+                if index + 7 > len(raw):
+                    return None
+                height = int.from_bytes(raw[index + 3 : index + 5], "big")
+                width = int.from_bytes(raw[index + 5 : index + 7], "big")
+                return width, height
+            index += segment_length
+        return None
+
     @staticmethod
     def _local_name(tag: str) -> str:
         return tag.rsplit("}", 1)[-1]
@@ -559,6 +976,8 @@ class GoogleDriveService(BaseIntegrationService):
         *,
         extraction_method: str = "plain_text",
         content_kind: str = "plain_text",
+        limits: dict | None = None,
+        metadata: dict | None = None,
     ) -> dict:
         truncated = len(text) > MAX_EXTRACTED_CHARS
         original_char_count = len(text)
@@ -571,6 +990,8 @@ class GoogleDriveService(BaseIntegrationService):
             extraction_method=extraction_method,
             content_kind=content_kind,
             original_char_count=original_char_count,
+            limits=limits,
+            metadata=metadata,
         )
 
     @staticmethod
@@ -602,6 +1023,7 @@ class GoogleDriveService(BaseIntegrationService):
         content_kind: str = "plain_text",
         original_char_count: int | None = None,
         limits: dict | None = None,
+        metadata: dict | None = None,
     ) -> dict:
         return build_extraction_result(
             content=text or None,
@@ -612,4 +1034,15 @@ class GoogleDriveService(BaseIntegrationService):
             truncated=truncated,
             original_char_count=original_char_count,
             limits={**EXTRACTION_LIMITS, **(limits or {})},
+            metadata=metadata,
         )
+
+    @staticmethod
+    def _merge_result_metadata(result: dict, metadata: dict | None) -> dict:
+        if not metadata:
+            return result
+        content_metadata = result.get("content_metadata")
+        if not isinstance(content_metadata, dict):
+            content_metadata = {}
+        result["content_metadata"] = {**content_metadata, **metadata}
+        return result

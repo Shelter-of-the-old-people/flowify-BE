@@ -63,6 +63,7 @@ def default_content_metadata(
     char_count: int = 0,
     original_char_count: int = 0,
     limits: dict[str, Any] | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_limits = default_content_limits()
     if limits:
@@ -75,6 +76,8 @@ def default_content_metadata(
         "original_char_count": original_char_count,
         "limits": normalized_limits,
     }
+    if extra:
+        metadata.update(extra)
     return metadata
 
 
@@ -116,6 +119,7 @@ def build_extraction_result(
     truncated: bool = False,
     original_char_count: int | None = None,
     limits: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     text = content or ""
     char_count = len(text)
@@ -131,6 +135,7 @@ def build_extraction_result(
         char_count=char_count,
         original_char_count=original_count,
         limits=limits,
+        extra=metadata,
     )
     legacy_status = legacy_status_for_content_status(content_status, truncated=truncated)
     return {

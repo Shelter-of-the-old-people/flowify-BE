@@ -17,6 +17,16 @@ class Settings(BaseSettings):
     LLM_MODEL_NAME: str = "gpt-4o"
     LLM_API_KEY: str = ""
     LLM_API_BASE_URL: str = ""
+    ENABLE_GMAIL_ATTACHMENT_EXTRACTION: bool = False
+    ENABLE_PDF_OCR: bool = False
+    ENABLE_IMAGE_OCR: bool = False
+    ENABLE_IMAGE_VISION: bool = False
+    OCR_PROVIDER: str = "openai_vision"
+    VISION_PROVIDER: str = "openai_vision"
+    VISION_MODEL_NAME: str = ""
+    OCR_LANGUAGES: str = "ko,en"
+    MAX_OCR_PAGES: int = 10
+    MAX_IMAGE_PIXELS: int = 12_000_000
 
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
@@ -36,7 +46,7 @@ class Settings(BaseSettings):
     CANVAS_TOKEN: str = ""
 
     @property
-    def CANVAS_LMS_API_URL(self) -> str:
+    def CANVAS_LMS_API_URL(self) -> str:  # noqa: N802
         return f"{self.CANVAS_API_URL.rstrip('/')}/api/v1"
 
     model_config = {
