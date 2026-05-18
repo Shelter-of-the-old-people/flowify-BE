@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import io
 import json
 import logging
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
 import httpx
@@ -13,8 +14,8 @@ import httpx
 from app.common.errors import ErrorCode, FlowifyException
 from app.core.nodes.base import NodeStrategy
 from app.core.nodes.google_sheets_common import (
-    build_table_read_range,
     build_sheet_range,
+    build_table_read_range,
     column_letter,
     normalize_cell,
     parse_sheet_range,
@@ -575,6 +576,19 @@ class OutputNodeStrategy(NodeStrategy):
     ) -> tuple[str, list[dict[str, Any]]]:
         data_type = input_data.get("type", "TEXT")
         if data_type == "TEXT":
+            if config.get("text_delivery_mode") == "attachment":
+                filename = self._text_attachment_filename(input_data.get("filename"))
+                body = config.get("body") or f"Attached file: {filename}"
+                content = input_data.get("content", "")
+                if not isinstance(content, bytes):
+                    content = str(content or "").encode("utf-8")
+                return body, [
+                    {
+                        "filename": filename,
+                        "mime_type": "text/plain",
+                        "content": content,
+                    }
+                ]
             return config.get("body") or input_data.get("content", ""), []
 
         if data_type == "SINGLE_FILE":
@@ -640,6 +654,12 @@ class OutputNodeStrategy(NodeStrategy):
         if status == "drafted":
             normalized["draftId"] = result.get("draftId") or result.get("id", "")
         return normalized
+
+    @staticmethod
+    def _text_attachment_filename(filename: Any) -> str:
+        name = PureWindowsPath(PurePosixPath(str(filename or "")).name).name
+        stem = PureWindowsPath(name).stem.strip() or "flowify-result"
+        return f"{stem}.txt"
 
     @staticmethod
     def _file_list_summary(items: list[dict]) -> str:

@@ -539,6 +539,80 @@ async def test_gmail_send_text(service_tokens: dict) -> None:
     )
 
 
+async def test_gmail_send_text_as_attachment(service_tokens: dict) -> None:
+    strategy = OutputNodeStrategy({})
+    node = _sink_node(
+        "gmail",
+        to="receiver@example.com",
+        subject="Flowify",
+        action="send",
+        text_delivery_mode="attachment",
+    )
+    input_data = {"type": "TEXT", "content": "Mail body"}
+
+    with patch("app.core.nodes.output_node.GmailService") as mock_gmail_class:
+        mock_gmail = mock_gmail_class.return_value
+        mock_gmail.send_message = AsyncMock(
+            return_value={"id": "msg_123", "threadId": "thread_123"}
+        )
+
+        await strategy.execute(node, input_data, service_tokens)
+
+    mock_gmail.send_message.assert_awaited_once_with(
+        service_tokens["gmail"],
+        "receiver@example.com",
+        "Flowify",
+        "Attached file: flowify-result.txt",
+        [
+            {
+                "filename": "flowify-result.txt",
+                "mime_type": "text/plain",
+                "content": b"Mail body",
+            }
+        ],
+    )
+
+
+async def test_gmail_send_text_as_attachment_normalizes_source_filename(
+    service_tokens: dict,
+) -> None:
+    strategy = OutputNodeStrategy({})
+    node = _sink_node(
+        "gmail",
+        to="receiver@example.com",
+        subject="Flowify",
+        action="send",
+        text_delivery_mode="attachment",
+    )
+    input_data = {
+        "type": "TEXT",
+        "content": "Summary",
+        "filename": r"C:\reports\latest.pdf",
+    }
+
+    with patch("app.core.nodes.output_node.GmailService") as mock_gmail_class:
+        mock_gmail = mock_gmail_class.return_value
+        mock_gmail.send_message = AsyncMock(
+            return_value={"id": "msg_123", "threadId": "thread_123"}
+        )
+
+        await strategy.execute(node, input_data, service_tokens)
+
+    mock_gmail.send_message.assert_awaited_once_with(
+        service_tokens["gmail"],
+        "receiver@example.com",
+        "Flowify",
+        "Attached file: latest.txt",
+        [
+            {
+                "filename": "latest.txt",
+                "mime_type": "text/plain",
+                "content": b"Summary",
+            }
+        ],
+    )
+
+
 async def test_gmail_send_text_uses_runtime_display_name(service_tokens: dict) -> None:
     strategy = OutputNodeStrategy({})
     node = _sink_node(

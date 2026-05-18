@@ -812,11 +812,23 @@ class WorkflowExecutor:
             if runtime_sink is None:
                 return False
 
-            accepted_types = ACCEPTED_INPUT_TYPES.get(runtime_sink.service, set())
-            if "FILE_LIST" not in accepted_types:
+            if not WorkflowExecutor._sink_prefers_loop_text_as_file_list(runtime_sink):
                 return False
 
         return True
+
+    @staticmethod
+    def _sink_prefers_loop_text_as_file_list(runtime_sink: Any) -> bool:
+        service = getattr(runtime_sink, "service", None)
+        accepted_types = ACCEPTED_INPUT_TYPES.get(service, set())
+        if "FILE_LIST" not in accepted_types:
+            return False
+        if service == "google_drive":
+            return True
+        if service == "gmail":
+            config = getattr(runtime_sink, "config", {}) or {}
+            return config.get("text_delivery_mode") == "attachment"
+        return False
 
     @staticmethod
     def _text_result_to_file_item(result: dict[str, Any], index: int) -> dict[str, Any]:
