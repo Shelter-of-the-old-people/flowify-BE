@@ -325,6 +325,56 @@ async def test_data_filter_schedule_data_fields_table_serializes_attendees():
     }
 
 
+async def test_data_filter_github_api_response_fields_to_spreadsheet():
+    strategy = DataFilterNodeStrategy()
+
+    result = await strategy.execute(
+        node=_node(
+            {
+                "choiceActionId": "filter_fields_table",
+                "choiceSelections": {
+                    "follow_up": ["repository", "pr_number", "title", "author", "url"]
+                },
+                "output_data_type": "SPREADSHEET_DATA",
+            }
+        ),
+        input_data={
+            "type": "API_RESPONSE",
+            "source_service": "github",
+            "event": "new_pr",
+            "repository": "openai/openai-python",
+            "pr_number": 780,
+            "title": "Make the trailing / optional at openai.base_url setting",
+            "author": "kylehh",
+            "url": "https://github.com/openai/openai-python/pull/780",
+            "items": [
+                {
+                    "repository": "openai/openai-python",
+                    "pr_number": 780,
+                    "title": "Make the trailing / optional at openai.base_url setting",
+                    "author": "kylehh",
+                    "url": "https://github.com/openai/openai-python/pull/780",
+                }
+            ],
+        },
+        service_tokens={},
+    )
+
+    assert result == {
+        "type": "SPREADSHEET_DATA",
+        "headers": ["repository", "pr_number", "title", "author", "url"],
+        "rows": [
+            [
+                "openai/openai-python",
+                780,
+                "Make the trailing / optional at openai.base_url setting",
+                "kylehh",
+                "https://github.com/openai/openai-python/pull/780",
+            ]
+        ],
+    }
+
+
 async def test_data_filter_unsupported_action_raises_invalid_request():
     strategy = DataFilterNodeStrategy()
 

@@ -83,6 +83,7 @@ def if_else_workflow() -> dict:
 def service_tokens() -> dict:
     """테스트용 서비스 토큰 딕셔너리."""
     return {
+        "github": "test_github_token",
         "gmail": "test_gmail_token",
         "notion": "test_notion_token",
         "google_drive": "test_drive_token",

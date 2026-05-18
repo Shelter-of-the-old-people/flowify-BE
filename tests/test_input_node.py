@@ -427,6 +427,193 @@ async def test_sheets_row_updated_returns_changed_rows(service_tokens: dict) -> 
     assert "a" in result["node_state_update"]["state"]["row_snapshot"]
 
 
+# ?? GitHub ??????????????????????????????????
+
+
+async def test_github_new_pr_first_run_bootstraps_without_emitting(service_tokens: dict) -> None:
+    strategy = InputNodeStrategy({})
+    node = {
+        "runtime_source": {
+            "service": "github",
+            "mode": "new_pr",
+            "target": "openai/openai-python",
+            "canonical_input_type": "API_RESPONSE",
+        }
+    }
+
+    with patch("app.core.nodes.input_node.GitHubService") as mock_github_class:
+        mock_github_class.parse_repository_target.return_value = (
+            "openai",
+            "openai-python",
+        )
+        mock_github = mock_github_class.return_value
+        mock_github.list_open_pull_requests = AsyncMock(
+            return_value=[
+                {
+                    "number": 101,
+                    "created_at": "2026-05-01T10:00:00Z",
+                }
+            ]
+        )
+
+        result = await strategy.execute(node, None, service_tokens)
+
+    assert result["type"] == "API_RESPONSE"
+    assert result["repository"] == "openai/openai-python"
+    assert result["items"] == []
+    assert result["pr"] is None
+    assert result["metadata"]["freshness"]["status"] == "initialized"
+    assert result["execution_control"] == {"skip_descendants": True}
+    assert result["node_state_update"] == {
+        "service": "github",
+        "state": {
+            "last_seen_pr_created_at": "2026-05-01T10:00:00Z",
+            "last_seen_pr_number": 101,
+        },
+    }
+    mock_github.list_open_pull_requests.assert_awaited_once_with(
+        service_tokens["github"], "openai", "openai-python"
+    )
+
+
+async def test_github_new_pr_emits_oldest_unseen_pr(service_tokens: dict) -> None:
+    strategy = InputNodeStrategy({})
+    node = {
+        "runtime_source": {
+            "service": "github",
+            "mode": "new_pr",
+            "target": "openai/openai-python",
+            "canonical_input_type": "API_RESPONSE",
+            "state": {
+                "last_seen_pr_created_at": "2026-05-01T10:00:00Z",
+                "last_seen_pr_number": 100,
+            },
+        }
+    }
+
+    with patch("app.core.nodes.input_node.GitHubService") as mock_github_class:
+        mock_github_class.parse_repository_target.return_value = (
+            "openai",
+            "openai-python",
+        )
+        mock_github = mock_github_class.return_value
+        mock_github.list_open_pull_requests = AsyncMock(
+            return_value=[
+                {
+                    "number": 101,
+                    "created_at": "2026-05-02T10:00:00Z",
+                },
+                {
+                    "number": 102,
+                    "created_at": "2026-05-03T10:00:00Z",
+                },
+            ]
+        )
+        mock_github.get_pull_request = AsyncMock(
+            return_value={
+                "number": 101,
+                "title": "Add workflow support",
+                "body": "Implements GitHub node",
+                "html_url": "https://github.com/openai/openai-python/pull/101",
+                "state": "open",
+                "draft": False,
+                "created_at": "2026-05-02T10:00:00Z",
+                "updated_at": "2026-05-02T12:00:00Z",
+                "user": {"login": "mhtiger"},
+                "base": {"ref": "main"},
+                "head": {"ref": "feat/github-node"},
+                "requested_reviewers": [{"login": "reviewer-1"}],
+                "labels": [{"name": "backend"}],
+                "changed_files": 2,
+            }
+        )
+        mock_github.list_pull_request_files = AsyncMock(
+            return_value=(
+                [
+                    {
+                        "filename": "app/core/nodes/input_node.py",
+                        "status": "modified",
+                        "additions": 10,
+                        "deletions": 2,
+                        "changes": 12,
+                        "sha": "abc123",
+                        "blob_url": "https://github.com/openai/openai-python/blob/main/app/core/nodes/input_node.py",
+                        "raw_url": "https://raw.githubusercontent.com/openai/openai-python/main/app/core/nodes/input_node.py",
+                        "previous_filename": "",
+                    }
+                ],
+                False,
+            )
+        )
+
+        result = await strategy.execute(node, None, service_tokens)
+
+    assert result["type"] == "API_RESPONSE"
+    assert result["pr_number"] == 101
+    assert result["title"] == "Add workflow support"
+    assert result["author"] == "mhtiger"
+    assert result["requested_reviewers"] == ["reviewer-1"]
+    assert result["labels"] == ["backend"]
+    assert result["changed_files_count"] == 2
+    assert result["changed_files_truncated"] is False
+    assert result["metadata"]["freshness"]["status"] == "new_items"
+    assert "execution_control" not in result
+    assert result["node_state_update"] == {
+        "service": "github",
+        "state": {
+            "last_seen_pr_created_at": "2026-05-02T10:00:00Z",
+            "last_seen_pr_number": 101,
+        },
+    }
+    mock_github.get_pull_request.assert_awaited_once_with(
+        service_tokens["github"], "openai", "openai-python", 101
+    )
+    mock_github.list_pull_request_files.assert_awaited_once_with(
+        service_tokens["github"], "openai", "openai-python", 101, limit=50
+    )
+
+
+async def test_github_new_pr_no_new_items_skips_descendants(service_tokens: dict) -> None:
+    strategy = InputNodeStrategy({})
+    node = {
+        "runtime_source": {
+            "service": "github",
+            "mode": "new_pr",
+            "target": "openai/openai-python",
+            "canonical_input_type": "API_RESPONSE",
+            "state": {
+                "last_seen_pr_created_at": "2026-05-03T10:00:00Z",
+                "last_seen_pr_number": 102,
+            },
+        }
+    }
+
+    with patch("app.core.nodes.input_node.GitHubService") as mock_github_class:
+        mock_github_class.parse_repository_target.return_value = (
+            "openai",
+            "openai-python",
+        )
+        mock_github = mock_github_class.return_value
+        mock_github.list_open_pull_requests = AsyncMock(
+            return_value=[
+                {
+                    "number": 101,
+                    "created_at": "2026-05-02T10:00:00Z",
+                },
+                {
+                    "number": 102,
+                    "created_at": "2026-05-03T10:00:00Z",
+                },
+            ]
+        )
+
+        result = await strategy.execute(node, None, service_tokens)
+
+    assert result["items"] == []
+    assert result["metadata"]["freshness"]["status"] == "no_new_items"
+    assert result["execution_control"] == {"skip_descendants": True}
+
+
 # ── 에러 케이스 ──────────────────────────────────────────────────
 
 

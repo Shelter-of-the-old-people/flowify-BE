@@ -376,6 +376,43 @@ class TestExecuteWorkflow:
         )
         assert "node_state_update" not in result.nodeLogs[0].outputData
 
+    @pytest.mark.asyncio
+    async def test_execution_control_skip_descendants_marks_downstream_skipped(self, mock_db):
+        executor = WorkflowExecutor(mock_db)
+        executor._factory = _mock_factory(
+            side_effect=[
+                {
+                    "type": "API_RESPONSE",
+                    "items": [],
+                    "metadata": {
+                        "freshness": {
+                            "status": "initialized",
+                            "checked_count": 1,
+                            "new_count": 0,
+                        }
+                    },
+                    "execution_control": {"skip_descendants": True},
+                },
+                {"type": "TEXT", "content": "should-not-run"},
+            ]
+        )
+
+        nodes = _make_nodes("input", "llm")
+        edges = _make_edges(("node_1", "node_2"))
+
+        result = await executor.execute(
+            execution_id="exec_skip_descendants",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=nodes,
+            edges=edges,
+            service_tokens={},
+        )
+
+        assert result.state == WorkflowState.SUCCESS
+        assert [log.status for log in result.nodeLogs] == ["success", "skipped"]
+        assert "execution_control" not in (result.nodeLogs[0].outputData or {})
+
 
 class TestFileTypeBranchExecution:
     """File type branch executor-level routing tests."""

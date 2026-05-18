@@ -10,8 +10,8 @@ import uuid
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.common.errors import ErrorCode, FlowifyException
-from app.core.document_content import truncate_content_for_log
 from app.config import settings
+from app.core.document_content import truncate_content_for_log
 from app.core.engine.snapshot import SnapshotManager
 from app.core.engine.state import WorkflowState, WorkflowStateManager
 from app.core.nodes.factory import NodeFactory
@@ -155,7 +155,7 @@ class WorkflowExecutor:
                     edge_outputs,
                 )
 
-                node_log, state_update = await self._execute_node(
+                node_log, state_update, execution_control = await self._execute_node(
                     node_def, input_data, service_tokens, snapshot_manager, runtime_context
                 )
                 if state_update:
@@ -201,7 +201,9 @@ class WorkflowExecutor:
                 # v2: 성공 시 canonical payload를 node_outputs에 저장
                 node_outputs[node_id] = node_log.outputData or {}
 
-                if freshness_decision.no_new_items:
+                if freshness_decision.no_new_items or (
+                    execution_control and execution_control.get("skip_descendants")
+                ):
                     skipped_nodes.update(self._get_descendants(node_id, adjacency))
                     continue
 
@@ -312,7 +314,7 @@ class WorkflowExecutor:
         service_tokens: dict[str, str],
         snapshot_manager: SnapshotManager,
         runtime_context: dict[str, Any] | None = None,
-    ) -> tuple[NodeExecutionLog, dict[str, Any] | None]:
+    ) -> tuple[NodeExecutionLog, dict[str, Any] | None, dict[str, Any] | None]:
         """단일 노드 실행. 스냅샷 저장, 타이밍 측정, 에러 캐치."""
         started_at = datetime.now(UTC)
 
@@ -334,8 +336,10 @@ class WorkflowExecutor:
                 service_tokens=service_tokens,
             )
             node_state_update = None
+            execution_control = None
             if isinstance(output_data, dict):
                 node_state_update = self._extract_node_state_update(node_def.id, output_data)
+                execution_control = self._extract_execution_control(output_data)
 
             return NodeExecutionLog(
                 nodeId=node_def.id,
@@ -348,7 +352,7 @@ class WorkflowExecutor:
                 ),
                 startedAt=started_at,
                 finishedAt=datetime.now(UTC),
-            ), node_state_update
+            ), node_state_update, execution_control
 
         except FlowifyException as e:
             return NodeExecutionLog(
@@ -367,7 +371,7 @@ class WorkflowExecutor:
                 ),
                 startedAt=started_at,
                 finishedAt=datetime.now(UTC),
-            ), None
+            ), None, None
 
         except Exception as e:
             return NodeExecutionLog(
@@ -385,7 +389,7 @@ class WorkflowExecutor:
                 ),
                 startedAt=started_at,
                 finishedAt=datetime.now(UTC),
-            ), None
+            ), None, None
 
     async def _save_execution(self, execution_id: str, execution: WorkflowExecution) -> None:
         """실행 상태를 MongoDB에 upsert합니다."""
@@ -444,6 +448,13 @@ class WorkflowExecutor:
             "service": raw_update.get("service"),
             "state": state,
         }
+
+    @staticmethod
+    def _extract_execution_control(output_data: dict[str, Any]) -> dict[str, Any] | None:
+        raw_control = output_data.pop("execution_control", None)
+        if not isinstance(raw_control, dict):
+            return None
+        return raw_control
 
     @staticmethod
     def _sanitize_for_log(data: dict | None) -> dict:
