@@ -29,6 +29,24 @@ FIELD_ALIASES = {
     "file_size": "size",
 }
 
+GITHUB_FIELD_ALIASES = {
+    "???": "repository",
+    "PR ??": "pr_number",
+    "PR ??": "title",
+    "???": "author",
+    "PR ??": "url",
+    "??": "state",
+    "???? ??": "draft",
+    "?? ??": "created_at",
+    "?? ???": "base_branch",
+    "?? ???": "head_branch",
+    "?? ?? ?": "changed_files_count",
+    "?? ??": "changed_files",
+    "??": "labels",
+    "?? ???": "requested_reviewers",
+    "PR ??": "body",
+}
+
 
 class DataFilterNodeStrategy(NodeStrategy):
     """선택된 필드만 남기는 결정적 데이터 필터를 수행합니다."""
@@ -188,7 +206,34 @@ class DataFilterNodeStrategy(NodeStrategy):
         input_data: dict[str, Any],
         fields: list[str],
     ) -> dict[str, Any]:
-        """API_RESPONSE payload에서 data 또는 items 값을 기준으로 projection합니다."""
+        """API_RESPONSE payload?? data ?? items ?? ???? projection???."""
+        if input_data.get("source_service") == "github":
+            items = input_data.get("items")
+            if isinstance(items, list):
+                return {
+                    "kind": "items",
+                    "fields": fields,
+                    "items": [
+                        self._project_mapping(item, fields)
+                        for item in items
+                        if isinstance(item, dict)
+                    ],
+                }
+
+            pr_payload = input_data.get("pr")
+            if isinstance(pr_payload, dict):
+                return {
+                    "kind": "single",
+                    "fields": fields,
+                    "data": self._project_mapping(pr_payload, fields),
+                }
+
+            return {
+                "kind": "single",
+                "fields": fields,
+                "data": self._project_mapping(input_data, fields),
+            }
+
         data = input_data.get("data", {})
         if isinstance(data, dict) and isinstance(data.get("items"), list):
             return {
@@ -230,6 +275,8 @@ class DataFilterNodeStrategy(NodeStrategy):
             return data.get("bodyPreview") or str(data.get("body", ""))[:200]
 
         source_key = FIELD_ALIASES.get(field, field)
+        if source_key == field and field in GITHUB_FIELD_ALIASES:
+            source_key = GITHUB_FIELD_ALIASES[field]
         return data.get(source_key, "")
 
     def _resolve_output_type(

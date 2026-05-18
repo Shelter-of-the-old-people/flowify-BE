@@ -1,4 +1,4 @@
-import io
+﻿import io
 from unittest.mock import AsyncMock, patch
 from zipfile import ZipFile
 
@@ -54,6 +54,84 @@ async def test_llm_node_summarize():
     assert result["type"] == "TEXT"
     assert result["content"] == "요약 결과"
     mock_instance.summarize.assert_called_once_with("긴 텍스트")
+
+
+async def test_github_summarize_without_custom_prompt_uses_plain_text_default_prompt():
+    with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
+        mock_instance = mock_svc_cls.return_value
+        mock_instance.process = AsyncMock(return_value="?? ??")
+        mock_instance.summarize = AsyncMock(return_value="generic summary")
+
+        from app.core.nodes.llm_node import LLMNodeStrategy
+
+        node = LLMNodeStrategy(config={"action": "summarize"})
+        node._llm_service = mock_instance
+
+        result = await node.execute(
+            node=_node(runtime_config={"action": "summarize", "output_data_type": "TEXT"}),
+            input_data={
+                "type": "API_RESPONSE",
+                "source_service": "github",
+                "event": "new_pr",
+                "repository": "openai/openai-python",
+                "pr_number": 780,
+                "title": "Make the trailing / optional at openai.base_url setting",
+                "author": "kylehh",
+                "url": "https://github.com/openai/openai-python/pull/780",
+                "body": "Update base_url handling for module client usage.",
+                "base_branch": "main",
+                "head_branch": "base_url",
+                "changed_files_count": 1,
+            },
+            service_tokens={},
+        )
+
+    assert result["type"] == "TEXT"
+    assert result["content"] == "?? ??"
+    mock_instance.summarize.assert_not_called()
+    mock_instance.process.assert_awaited_once()
+    prompt = mock_instance.process.await_args.args[0]
+    context = mock_instance.process.await_args.kwargs["context"]
+    assert "기본 정보" in prompt
+    assert "Do not use markdown headings, bold markers like **" in prompt
+    assert "Repository: openai/openai-python" in context
+    assert "Title: Make the trailing / optional at openai.base_url setting" in context
+
+
+async def test_github_process_without_custom_prompt_uses_plain_text_default_prompt():
+    with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
+        mock_instance = mock_svc_cls.return_value
+        mock_instance.process = AsyncMock(return_value="?? ??")
+
+        from app.core.nodes.llm_node import LLMNodeStrategy
+
+        node = LLMNodeStrategy(config={"action": "process"})
+        node._llm_service = mock_instance
+
+        result = await node.execute(
+            node=_node(runtime_config={"action": "process", "output_data_type": "TEXT"}),
+            input_data={
+                "type": "API_RESPONSE",
+                "source_service": "github",
+                "event": "new_pr",
+                "repository": "openai/openai-python",
+                "pr_number": 780,
+                "title": "Make the trailing / optional at openai.base_url setting",
+                "author": "kylehh",
+                "url": "https://github.com/openai/openai-python/pull/780",
+                "body": "Update base_url handling for module client usage.",
+                "base_branch": "main",
+                "head_branch": "base_url",
+                "changed_files_count": 1,
+            },
+            service_tokens={},
+        )
+
+    assert result["type"] == "TEXT"
+    assert result["content"] == "?? ??"
+    mock_instance.process.assert_awaited_once()
+    prompt = mock_instance.process.await_args.args[0]
+    assert "기본 정보" in prompt
 
 
 async def test_llm_node_classify():
@@ -668,6 +746,58 @@ async def test_extract_text_from_article_list_includes_article_fields():
     assert "URL: https://seboard.site/posts/123" in call_args
     assert "Summary:" in call_args
     assert "Full content" in call_args
+
+
+async def test_extract_text_from_github_api_response_formats_pull_request_context():
+    with patch("app.core.nodes.llm_node.LLMService") as mock_svc_cls:
+        mock_instance = mock_svc_cls.return_value
+        mock_instance.process = AsyncMock(return_value="?? ??")
+        mock_instance.summarize = AsyncMock(return_value="generic summary")
+
+        from app.core.nodes.llm_node import LLMNodeStrategy
+
+        node = LLMNodeStrategy(config={"action": "summarize"})
+        node._llm_service = mock_instance
+
+        await node.execute(
+            node=_node(runtime_config={"action": "summarize", "output_data_type": "TEXT"}),
+            input_data={
+                "type": "API_RESPONSE",
+                "source_service": "github",
+                "event": "new_pr",
+                "repository": "openai/openai-python",
+                "pr_number": 780,
+                "title": "Make the trailing / optional at openai.base_url setting",
+                "author": "kylehh",
+                "url": "https://github.com/openai/openai-python/pull/780",
+                "body": "Update base_url handling for module client usage.",
+                "base_branch": "main",
+                "head_branch": "base_url-fix",
+                "labels": ["bug"],
+                "requested_reviewers": ["reviewer1"],
+                "changed_files_count": 1,
+                "changed_files": [
+                    {
+                        "filename": "src/openai/_base_client.py",
+                        "status": "modified",
+                        "additions": 1,
+                        "deletions": 1,
+                        "changes": 2,
+                    }
+                ],
+            },
+            service_tokens={},
+        )
+
+    call_args = mock_instance.process.await_args.kwargs["context"]
+    assert "Repository: openai/openai-python" in call_args
+    assert "PR Number: 780" in call_args
+    assert "Title: Make the trailing / optional at openai.base_url setting" in call_args
+    assert "Author: kylehh" in call_args
+    assert "PR Body:" in call_args
+    assert "Update base_url handling for module client usage." in call_args
+    assert "Changed Files:" in call_args
+    assert "src/openai/_base_client.py" in call_args
 
 
 def test_validate_process_requires_prompt():

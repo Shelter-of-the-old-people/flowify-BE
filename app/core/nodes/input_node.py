@@ -1,10 +1,11 @@
-"""Input node strategy for runtime source collection.
+﻿"""Input node strategy for runtime source collection.
 
 Reads ``runtime_source`` metadata from a workflow node, fetches data from the
 matching external service, and returns a canonical payload that matches the
 declared input type.
 """
 
+from datetime import UTC, datetime
 import logging
 from typing import Any
 
@@ -19,6 +20,7 @@ from app.core.nodes.google_sheets_common import (
     row_to_record,
 )
 from app.services.integrations.canvas_lms import CanvasLmsService
+from app.services.integrations.github import GitHubService
 from app.services.integrations.gmail import GmailService
 from app.services.integrations.google_drive import GoogleDriveService
 from app.services.integrations.google_sheets import GoogleSheetsService
@@ -46,6 +48,7 @@ SUPPORTED_SOURCES: dict[str, set[str]] = {
     },
     "google_sheets": {"sheet_all", "new_row", "row_updated"},
     "canvas_lms": {"course_files", "course_new_file", "term_all_files"},
+    "github": {"new_pr"},
     "naver_news": {"article_search", "new_articles"},
     "web_news": {"seboard_posts", "seboard_new_posts", "website_feed"},
 }
@@ -86,7 +89,7 @@ class InputNodeStrategy(NodeStrategy):
         if not token and service not in TOKENLESS_SOURCES:
             raise FlowifyException(
                 ErrorCode.OAUTH_TOKEN_INVALID,
-                detail=f"'{service}' 서비스의 토큰이 없습니다.",
+                detail=f"'{service}' ?쒕퉬?ㅼ쓽 ?좏겙???놁뒿?덈떎.",
             )
 
         if service == "google_drive":
@@ -110,6 +113,13 @@ class InputNodeStrategy(NodeStrategy):
             )
         if service == "canvas_lms":
             return await self._fetch_canvas_lms(token, mode, target)
+        if service == "github":
+            return await self._fetch_github(
+                token,
+                mode,
+                target,
+                runtime_source_state,
+            )
         if service == "naver_news":
             return await self._fetch_naver_news(mode, target, config)
         if service == "web_news":
@@ -571,7 +581,256 @@ class InputNodeStrategy(NodeStrategy):
         }
         return payload
 
-    # Canvas LMS
+    # GitHub
+
+    async def _fetch_github(
+        self,
+        token: str,
+        mode: str,
+        target: str,
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        if mode != "new_pr":
+            raise FlowifyException(
+                ErrorCode.UNSUPPORTED_RUNTIME_SOURCE,
+                detail=f"service=github, mode={mode} is not supported",
+            )
+
+        owner, repo = GitHubService.parse_repository_target(target)
+        repository = f"{owner}/{repo}"
+        svc = GitHubService()
+        pull_requests = await svc.list_open_pull_requests(token, owner, repo)
+
+        if not state:
+            return self._build_github_skip_payload(
+                repository=repository,
+                owner=owner,
+                repo=repo,
+                pull_requests=pull_requests,
+                status="initialized",
+                next_state=self._build_github_bootstrap_state(pull_requests),
+            )
+
+        last_seen_created_at = self._to_github_cursor_datetime(
+            state.get("last_seen_pr_created_at")
+        )
+        last_seen_pr_number = self._coerce_github_pr_number(
+            state.get("last_seen_pr_number")
+        )
+        selected_pr = self._select_next_unseen_pr(
+            pull_requests,
+            last_seen_created_at=last_seen_created_at,
+            last_seen_pr_number=last_seen_pr_number,
+        )
+
+        if selected_pr is None:
+            return self._build_github_skip_payload(
+                repository=repository,
+                owner=owner,
+                repo=repo,
+                pull_requests=pull_requests,
+                status="no_new_items",
+                next_state={
+                    "last_seen_pr_created_at": state.get("last_seen_pr_created_at"),
+                    "last_seen_pr_number": last_seen_pr_number,
+                },
+            )
+
+        pr_number = int(selected_pr.get("number") or 0)
+        pr_detail = await svc.get_pull_request(token, owner, repo, pr_number)
+        changed_files, changed_files_truncated = await svc.list_pull_request_files(
+            token,
+            owner,
+            repo,
+            pr_number,
+            limit=50,
+        )
+        pr_payload = self._build_github_pr_payload(
+            repository=repository,
+            owner=owner,
+            repo=repo,
+            pr_detail=pr_detail,
+            changed_files=changed_files,
+            changed_files_truncated=changed_files_truncated,
+            checked_count=len(pull_requests),
+        )
+        pr_payload["node_state_update"] = {
+            "service": "github",
+            "state": {
+                "last_seen_pr_created_at": pr_payload["created_at"],
+                "last_seen_pr_number": pr_payload["pr_number"],
+            },
+        }
+        return pr_payload
+
+    def _build_github_skip_payload(
+        self,
+        *,
+        repository: str,
+        owner: str,
+        repo: str,
+        pull_requests: list[dict[str, Any]],
+        status: str,
+        next_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "type": "API_RESPONSE",
+            "source_service": "github",
+            "event": "new_pr",
+            "repository": repository,
+            "repository_owner": owner,
+            "repository_name": repo,
+            "items": [],
+            "pr": None,
+            "metadata": {
+                "mode": "new_pr",
+                "freshness": {
+                    "status": status,
+                    "checked_count": len(pull_requests),
+                    "new_count": 0,
+                },
+            },
+            "node_state_update": {
+                "service": "github",
+                "state": next_state,
+            },
+            "execution_control": {
+                "skip_descendants": True,
+            },
+        }
+
+    def _build_github_pr_payload(
+        self,
+        *,
+        repository: str,
+        owner: str,
+        repo: str,
+        pr_detail: dict[str, Any],
+        changed_files: list[dict[str, Any]],
+        changed_files_truncated: bool,
+        checked_count: int,
+    ) -> dict[str, Any]:
+        pr_payload = {
+            "repository": repository,
+            "repository_owner": owner,
+            "repository_name": repo,
+            "pr_number": int(pr_detail.get("number") or 0),
+            "title": pr_detail.get("title") or "",
+            "body": pr_detail.get("body") or "",
+            "author": (pr_detail.get("user") or {}).get("login") or "",
+            "url": pr_detail.get("html_url") or "",
+            "state": pr_detail.get("state") or "",
+            "draft": bool(pr_detail.get("draft")),
+            "created_at": pr_detail.get("created_at") or "",
+            "updated_at": pr_detail.get("updated_at") or "",
+            "base_branch": ((pr_detail.get("base") or {}).get("ref")) or "",
+            "head_branch": ((pr_detail.get("head") or {}).get("ref")) or "",
+            "requested_reviewers": [
+                reviewer.get("login")
+                for reviewer in (pr_detail.get("requested_reviewers") or [])
+                if isinstance(reviewer, dict) and reviewer.get("login")
+            ],
+            "labels": [
+                label.get("name")
+                for label in (pr_detail.get("labels") or [])
+                if isinstance(label, dict) and label.get("name")
+            ],
+            "changed_files_count": int(
+                pr_detail.get("changed_files") or len(changed_files)
+            ),
+            "changed_files_truncated": changed_files_truncated,
+            "changed_files": changed_files,
+        }
+        return {
+            "type": "API_RESPONSE",
+            "source_service": "github",
+            "event": "new_pr",
+            **pr_payload,
+            "pr": pr_payload,
+            "items": [pr_payload],
+            "metadata": {
+                "mode": "new_pr",
+                "freshness": {
+                    "status": "new_items",
+                    "checked_count": checked_count,
+                    "new_count": 1,
+                },
+            },
+        }
+
+    def _build_github_bootstrap_state(
+        self,
+        pull_requests: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if not pull_requests:
+            return {
+                "last_seen_pr_created_at": self._format_github_cursor_datetime(
+                    datetime.now(UTC)
+                ),
+                "last_seen_pr_number": 0,
+            }
+
+        latest_pr = max(
+            pull_requests,
+            key=lambda pr: (
+                self._to_github_cursor_datetime(pr.get("created_at")),
+                self._coerce_github_pr_number(pr.get("number")),
+            ),
+        )
+        return {
+            "last_seen_pr_created_at": latest_pr.get("created_at") or "",
+            "last_seen_pr_number": self._coerce_github_pr_number(
+                latest_pr.get("number")
+            ),
+        }
+
+    def _select_next_unseen_pr(
+        self,
+        pull_requests: list[dict[str, Any]],
+        *,
+        last_seen_created_at: datetime,
+        last_seen_pr_number: int,
+    ) -> dict[str, Any] | None:
+        sorted_pull_requests = sorted(
+            pull_requests,
+            key=lambda pr: (
+                self._to_github_cursor_datetime(pr.get("created_at")),
+                self._coerce_github_pr_number(pr.get("number")),
+            ),
+        )
+
+        for pull_request in sorted_pull_requests:
+            created_at = self._to_github_cursor_datetime(
+                pull_request.get("created_at")
+            )
+            pr_number = self._coerce_github_pr_number(pull_request.get("number"))
+            if (created_at, pr_number) > (last_seen_created_at, last_seen_pr_number):
+                return pull_request
+
+        return None
+
+    @staticmethod
+    def _to_github_cursor_datetime(value: Any) -> datetime:
+        if isinstance(value, datetime):
+            return value.astimezone(UTC)
+        if isinstance(value, str) and value.strip():
+            normalized = value.strip().replace("Z", "+00:00")
+            try:
+                return datetime.fromisoformat(normalized).astimezone(UTC)
+            except ValueError:
+                logger.warning("Invalid GitHub cursor datetime value: %s", value)
+        return datetime.min.replace(tzinfo=UTC)
+
+    @staticmethod
+    def _format_github_cursor_datetime(value: datetime) -> str:
+        return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+    @staticmethod
+    def _coerce_github_pr_number(value: Any) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0    # Canvas LMS
 
     async def _fetch_canvas_lms(self, token: str, mode: str, target: str) -> dict[str, Any]:
         svc = CanvasLmsService()
@@ -611,7 +870,7 @@ class InputNodeStrategy(NodeStrategy):
             if not matching:
                 raise FlowifyException(
                     ErrorCode.NODE_EXECUTION_FAILED,
-                    detail=f"학기 '{target}'에 해당하는 과목이 없습니다.",
+                    detail=f"?숆린 '{target}'???대떦?섎뒗 怨쇰ぉ???놁뒿?덈떎.",
                 )
 
             all_items: list[dict] = []
@@ -624,7 +883,7 @@ class InputNodeStrategy(NodeStrategy):
                     )
                 except Exception as e:
                     logger.warning(
-                        "Canvas LMS 과목 '%s' 파일 조회 실패: %s",
+                        "Canvas LMS 怨쇰ぉ '%s' ?뚯씪 議고쉶 ?ㅽ뙣: %s",
                         course.get("name"),
                         e,
                     )
@@ -721,3 +980,4 @@ class InputNodeStrategy(NodeStrategy):
         except (TypeError, ValueError):
             logger.warning("Invalid article limit value for web_news source: %s", raw_value)
             return 10
+
