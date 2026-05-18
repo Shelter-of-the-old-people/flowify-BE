@@ -631,6 +631,15 @@ class TestLoopExecution:
             runtime_config={"node_type": "loop", "output_data_type": "SINGLE_EMAIL"},
         )
 
+    def _make_loop_node_text(self, node_id: str = "node_2") -> NodeDefinition:
+        return NodeDefinition(
+            id=node_id,
+            type="loop",
+            config={},
+            runtime_type="loop",
+            runtime_config={"node_type": "loop", "output_data_type": "TEXT"},
+        )
+
     @pytest.mark.asyncio
     async def test_file_list_loop_executes_body_per_item(self, mock_db):
         """FILE_LIST → loop → llm: body 2회 실행, TEXT aggregate."""
@@ -779,6 +788,148 @@ class TestLoopExecution:
         ]
         assert output_input["type"] == "FILE_LIST"
         assert len(output_input["items"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_article_list_loop_keeps_text_aggregate_for_gmail_body_mode(self, mock_db):
+        executor = WorkflowExecutor(mock_db)
+        output_input: dict = {}
+
+        async def side_effect(node, input_data, service_tokens):
+            node_type = node.get("type", "")
+            if node_type == "input":
+                return {
+                    "type": "ARTICLE_LIST",
+                    "items": [
+                        {"title": "Article A", "content": "aaa"},
+                        {"title": "Article B", "content": "bbb"},
+                    ],
+                }
+            if node_type == "loop":
+                return input_data
+            if node_type == "llm":
+                article = input_data.get("article", {})
+                return {"type": "TEXT", "content": f"summary:{article.get('title', '')}"}
+            if node.get("runtime_type") == "output":
+                output_input.update(input_data)
+                return {"type": "TEXT", "content": "sent"}
+            return {"type": "TEXT", "content": "ok"}
+
+        executor._factory = _mock_factory(side_effect=side_effect)
+
+        nodes = [
+            NodeDefinition(id="node_1", type="input", config={}),
+            self._make_loop_node_text("node_2"),
+            NodeDefinition(id="node_3", type="llm", config={}),
+            NodeDefinition(
+                id="node_4",
+                type="gmail",
+                config={},
+                runtime_type="output",
+                runtime_sink={
+                    "service": "gmail",
+                    "config": {
+                        "to": "receiver@example.com",
+                        "subject": "News",
+                        "action": "send",
+                    },
+                },
+            ),
+        ]
+        edges = _make_edges(("node_1", "node_2"), ("node_2", "node_3"), ("node_3", "node_4"))
+
+        result = await executor.execute(
+            execution_id="exec_loop_gmail_body",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=nodes,
+            edges=edges,
+            service_tokens={},
+        )
+
+        assert result.state == WorkflowState.SUCCESS
+        body_log = result.nodeLogs[2]
+        assert body_log.outputData["type"] == "TEXT"
+        assert output_input["type"] == "TEXT"
+        assert "1. summary:Article A" in output_input["content"]
+        assert "2. summary:Article B" in output_input["content"]
+
+    @pytest.mark.asyncio
+    async def test_article_list_loop_preserves_text_results_for_gmail_attachment_mode(
+        self,
+        mock_db,
+    ):
+        executor = WorkflowExecutor(mock_db)
+        output_input: dict = {}
+
+        async def side_effect(node, input_data, service_tokens):
+            node_type = node.get("type", "")
+            if node_type == "input":
+                return {
+                    "type": "ARTICLE_LIST",
+                    "items": [
+                        {"title": "Article A", "content": "aaa"},
+                        {"title": "Article B", "content": "bbb"},
+                    ],
+                }
+            if node_type == "loop":
+                return input_data
+            if node_type == "llm":
+                article = input_data.get("article", {})
+                return {"type": "TEXT", "content": f"summary:{article.get('title', '')}"}
+            if node.get("runtime_type") == "output":
+                output_input.update(input_data)
+                return {"type": "TEXT", "content": "sent"}
+            return {"type": "TEXT", "content": "ok"}
+
+        executor._factory = _mock_factory(side_effect=side_effect)
+
+        nodes = [
+            NodeDefinition(id="node_1", type="input", config={}),
+            self._make_loop_node_text("node_2"),
+            NodeDefinition(id="node_3", type="llm", config={}),
+            NodeDefinition(
+                id="node_4",
+                type="gmail",
+                config={},
+                runtime_type="output",
+                runtime_sink={
+                    "service": "gmail",
+                    "config": {
+                        "to": "receiver@example.com",
+                        "subject": "News",
+                        "action": "send",
+                        "text_delivery_mode": "attachment",
+                    },
+                },
+            ),
+        ]
+        edges = _make_edges(("node_1", "node_2"), ("node_2", "node_3"), ("node_3", "node_4"))
+
+        result = await executor.execute(
+            execution_id="exec_loop_gmail_attachment",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=nodes,
+            edges=edges,
+            service_tokens={},
+        )
+
+        assert result.state == WorkflowState.SUCCESS
+        body_log = result.nodeLogs[2]
+        assert body_log.outputData["type"] == "FILE_LIST"
+        assert output_input["type"] == "FILE_LIST"
+        assert output_input["items"] == [
+            {
+                "filename": "001-loop-result-1.txt",
+                "mime_type": "text/plain",
+                "content": "summary:Article A",
+            },
+            {
+                "filename": "002-loop-result-2.txt",
+                "mime_type": "text/plain",
+                "content": "summary:Article B",
+            },
+        ]
 
     @pytest.mark.asyncio
     async def test_file_list_loop_keeps_text_aggregate_for_text_only_sink(self, mock_db):
