@@ -5,6 +5,7 @@ import pytest
 from app.common.errors import ErrorCode, FlowifyException
 from app.core.engine.executor import WorkflowExecutor, register_cancellation_event
 from app.core.engine.state import WorkflowState
+from app.core.nodes.logic_node import IfElseNodeStrategy
 from app.models.workflow import EdgeDefinition, NodeDefinition
 
 
@@ -1103,6 +1104,86 @@ class TestLoopExecution:
         assert "Urgent release" in output_inputs["node_important"]["content"]
         assert "Reference note" not in output_inputs["node_important"]["content"]
         assert output_inputs["node_reference"]["type"] == "TEXT"
+        assert "Reference note" in output_inputs["node_reference"]["content"]
+        assert "Urgent release" not in output_inputs["node_reference"]["content"]
+
+    @pytest.mark.asyncio
+    async def test_article_list_loop_routes_actual_content_branch_strategy(self, mock_db):
+        executor = WorkflowExecutor(mock_db)
+        output_inputs: dict[str, dict] = {}
+        content_branch = IfElseNodeStrategy()
+
+        async def side_effect(node, input_data, service_tokens):
+            node_id = node.get("id", "")
+            node_type = node.get("type", "")
+            if node_type == "input":
+                return {
+                    "type": "ARTICLE_LIST",
+                    "items": [
+                        {"title": "Urgent release", "content": "urgent update"},
+                        {"title": "Reference note", "content": "reference material"},
+                    ],
+                }
+            if node_type == "loop":
+                return input_data
+            if node_id == "node_branch":
+                return await content_branch.execute(node, input_data, service_tokens)
+            if node.get("runtime_type") == "output":
+                output_inputs[node_id] = input_data
+                return {"type": "TEXT", "content": "sent"}
+            return {"type": "TEXT", "content": "ok"}
+
+        executor._factory = _mock_factory(side_effect=side_effect)
+
+        nodes = [
+            NodeDefinition(id="node_1", type="input", config={}),
+            self._make_loop_node_text("node_2"),
+            NodeDefinition(
+                id="node_branch",
+                type="condition",
+                config={},
+                runtime_type="if_else",
+                runtime_config={
+                    "node_type": "CONDITION_BRANCH",
+                    "branch_type": "content_classification",
+                    "output_data_type": "TEXT",
+                    "branch_rules": [
+                        {
+                            "key": "important",
+                            "label": "Important",
+                            "matcher": {"keywords": ["urgent"]},
+                        },
+                        {
+                            "key": "reference",
+                            "label": "Reference",
+                            "matcher": {"keywords": ["reference"]},
+                        },
+                    ],
+                    "fallback_branch": {"key": "other", "label": "Other"},
+                },
+            ),
+            NodeDefinition(id="node_important", type="gmail", config={}, runtime_type="output"),
+            NodeDefinition(id="node_reference", type="notion", config={}, runtime_type="output"),
+        ]
+        edges = [
+            EdgeDefinition(source="node_1", target="node_2"),
+            EdgeDefinition(source="node_2", target="node_branch"),
+            EdgeDefinition(source="node_branch", target="node_important"),
+            EdgeDefinition(source="node_branch", target="node_reference"),
+        ]
+
+        result = await executor.execute(
+            execution_id="exec_loop_actual_content_branch",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=nodes,
+            edges=edges,
+            service_tokens={},
+        )
+
+        assert result.state == WorkflowState.SUCCESS
+        assert "Urgent release" in output_inputs["node_important"]["content"]
+        assert "Reference note" not in output_inputs["node_important"]["content"]
         assert "Reference note" in output_inputs["node_reference"]["content"]
         assert "Urgent release" not in output_inputs["node_reference"]["content"]
 
