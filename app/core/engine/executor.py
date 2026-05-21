@@ -259,6 +259,30 @@ class WorkflowExecutor:
                         return execution
 
                     node_outputs[body_node_id] = aggregate_log.outputData or {}
+                    body_output = node_outputs[body_node_id]
+                    body_runtime_type = getattr(body_node_def, "runtime_type", None) or body_node_def.type
+                    if (
+                        body_runtime_type == "if_else"
+                        and isinstance(body_output, dict)
+                        and isinstance(body_output.get("branch_outputs"), dict)
+                    ):
+                        (
+                            branch_edge_outputs,
+                            active_targets,
+                            inactive_targets,
+                        ) = self._build_multi_branch_edge_outputs(
+                            body_node_id,
+                            body_output,
+                            edges,
+                        )
+                        edge_outputs.update(branch_edge_outputs)
+                        skipped_nodes.update(
+                            self._resolve_multi_branch_skipped_nodes(
+                                active_targets,
+                                inactive_targets,
+                                adjacency,
+                            )
+                        )
                     handled_nodes.add(body_node_id)
                     continue
 
@@ -499,15 +523,26 @@ class WorkflowExecutor:
         edges: list[EdgeDefinition],
     ) -> tuple[dict[tuple[str, str], dict[str, Any]], set[str], set[str]]:
         branch_outputs = output_data.get("branch_outputs") or {}
+        branch_edge_order = cls._branch_edge_order(output_data, branch_outputs)
+        outgoing_edges = [edge for edge in edges if edge.source == node_id]
+        keyed_branch_keys = {
+            branch_key
+            for edge in outgoing_edges
+            if (branch_key := cls._branch_edge_key(edge))
+        }
+        ordered_branch_keys: set[str] = set()
         edge_outputs: dict[tuple[str, str], dict[str, Any]] = {}
         active_targets: set[str] = set()
         inactive_targets: set[str] = set()
 
-        for edge in edges:
-            if edge.source != node_id:
-                continue
-
+        for edge in outgoing_edges:
             branch_key = cls._branch_edge_key(edge)
+            if not branch_key:
+                branch_key = cls._next_ordered_branch_key(
+                    branch_edge_order,
+                    keyed_branch_keys,
+                    ordered_branch_keys,
+                )
             if not branch_key:
                 raise FlowifyException(
                     ErrorCode.INVALID_REQUEST,
@@ -531,6 +566,33 @@ class WorkflowExecutor:
     @staticmethod
     def _branch_edge_key(edge: EdgeDefinition) -> str:
         return str(edge.label or edge.source_handle or "").strip()
+
+    @staticmethod
+    def _branch_edge_order(
+        output_data: dict[str, Any],
+        branch_outputs: dict[str, Any],
+    ) -> list[str]:
+        value = output_data.get("branch_edge_order")
+        if not isinstance(value, list):
+            return []
+        return [
+            branch_key
+            for item in value
+            if (branch_key := str(item or "").strip()) and branch_key in branch_outputs
+        ]
+
+    @staticmethod
+    def _next_ordered_branch_key(
+        branch_edge_order: list[str],
+        keyed_branch_keys: set[str],
+        ordered_branch_keys: set[str],
+    ) -> str:
+        for branch_key in branch_edge_order:
+            if branch_key in keyed_branch_keys or branch_key in ordered_branch_keys:
+                continue
+            ordered_branch_keys.add(branch_key)
+            return branch_key
+        return ""
 
     @staticmethod
     def _has_branch_items(payload: Any) -> bool:
@@ -726,6 +788,9 @@ class WorkflowExecutor:
         if not results:
             return {"type": "TEXT", "content": "", "loop_results": [], "iterations": 0}
 
+        if WorkflowExecutor._has_loop_branch_results(results):
+            return WorkflowExecutor._aggregate_loop_branch_outputs(results)
+
         output_type = results[0].get("type", "TEXT")
 
         # 혼합 타입 검사
@@ -795,6 +860,135 @@ class WorkflowExecutor:
             "loop_results": results,
             "iterations": iterations,
         }
+
+    @staticmethod
+    def _has_loop_branch_results(results: list[dict[str, Any]]) -> bool:
+        return any(
+            isinstance(result.get("branch_outputs"), dict)
+            or result.get("branch") in ("true", "false")
+            for result in results
+        )
+
+    @staticmethod
+    def _aggregate_loop_branch_outputs(results: list[dict[str, Any]]) -> dict[str, Any]:
+        branch_items: dict[str, list[dict[str, Any]]] = {}
+        branch_payload_types: dict[str, str] = {}
+        branch_edge_order: list[str] = []
+
+        def ensure_branch(branch_key: str, payload_type: str = "TEXT") -> None:
+            if not branch_key:
+                return
+            branch_items.setdefault(branch_key, [])
+            branch_payload_types.setdefault(branch_key, payload_type or "TEXT")
+            if branch_key not in branch_edge_order:
+                branch_edge_order.append(branch_key)
+
+        for result in results:
+            branch_outputs = result.get("branch_outputs")
+            if isinstance(branch_outputs, dict):
+                ordered_keys = WorkflowExecutor._branch_edge_order(result, branch_outputs)
+                if not ordered_keys:
+                    ordered_keys = [str(key) for key in branch_outputs]
+                for branch_key in ordered_keys:
+                    payload = branch_outputs.get(branch_key) or {}
+                    payload_type = payload.get("type", "TEXT") if isinstance(payload, dict) else "TEXT"
+                    ensure_branch(branch_key, payload_type)
+
+                for raw_key, payload in branch_outputs.items():
+                    branch_key = str(raw_key or "").strip()
+                    if not branch_key or not isinstance(payload, dict):
+                        continue
+                    payload_type = str(payload.get("type") or "TEXT")
+                    ensure_branch(branch_key, payload_type)
+                    items = payload.get("items")
+                    if isinstance(items, list):
+                        branch_items[branch_key].extend(
+                            WorkflowExecutor._to_branch_aggregate_item(item, payload_type)
+                            for item in items
+                        )
+                    elif payload.get("content"):
+                        branch_items[branch_key].append(
+                            WorkflowExecutor._to_branch_aggregate_item(payload, payload_type)
+                        )
+                continue
+
+            branch_key = str(result.get("branch") or "").strip()
+            if branch_key in ("true", "false"):
+                ensure_branch("true")
+                ensure_branch("false")
+                branch_items[branch_key].append(
+                    WorkflowExecutor._to_branch_aggregate_item(result, "TEXT")
+                )
+
+        branch_outputs = {
+            branch_key: WorkflowExecutor._aggregate_branch_payload(
+                branch_items.get(branch_key, []),
+                branch_payload_types.get(branch_key, "TEXT"),
+            )
+            for branch_key in branch_edge_order
+        }
+
+        all_content = WorkflowExecutor._aggregate_text_items_content(
+            [
+                WorkflowExecutor._to_branch_aggregate_item(result, "TEXT")
+                for result in results
+            ]
+        )
+        return {
+            "type": results[0].get("type", "TEXT"),
+            "content": all_content,
+            "branch": "multi",
+            "branch_outputs": branch_outputs,
+            "branch_counts": {
+                branch_key: len(payload.get("items", []))
+                for branch_key, payload in branch_outputs.items()
+            },
+            "branch_edge_order": branch_edge_order,
+            "loop_results": results,
+            "iterations": len(results),
+        }
+
+    @staticmethod
+    def _to_branch_aggregate_item(item: Any, payload_type: str) -> dict[str, Any]:
+        if isinstance(item, dict):
+            result = copy.deepcopy(item)
+        else:
+            result = {"content": str(item)}
+
+        if payload_type == "TEXT":
+            result["type"] = "TEXT"
+            result.setdefault("content", WorkflowExecutor._branch_item_text(result))
+        return result
+
+    @staticmethod
+    def _aggregate_branch_payload(items: list[dict[str, Any]], payload_type: str) -> dict[str, Any]:
+        if payload_type == "FILE_LIST":
+            return {"type": "FILE_LIST", "items": items}
+        if payload_type == "EMAIL_LIST":
+            return {"type": "EMAIL_LIST", "items": items}
+        if payload_type == "SCHEDULE_DATA":
+            return {"type": "SCHEDULE_DATA", "items": items}
+
+        return {
+            "type": "TEXT",
+            "content": WorkflowExecutor._aggregate_text_items_content(items),
+            "items": items,
+        }
+
+    @staticmethod
+    def _aggregate_text_items_content(items: list[dict[str, Any]]) -> str:
+        parts = []
+        for idx, item in enumerate(items, start=1):
+            parts.append(f"{idx}. {WorkflowExecutor._branch_item_text(item)}")
+        return "\n\n---\n\n".join(parts)
+
+    @staticmethod
+    def _branch_item_text(item: dict[str, Any]) -> str:
+        for key in ("content", "text", "summary", "title", "body", "bodyPreview"):
+            value = item.get(key)
+            if value not in (None, ""):
+                return str(value)
+        return str(item)
 
     @staticmethod
     def _should_preserve_text_results_as_file_list(
