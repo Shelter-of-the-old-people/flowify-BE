@@ -40,6 +40,31 @@ def _file_type_branch_rules() -> list[dict]:
     ]
 
 
+def _content_branch_runtime_config() -> dict:
+    return {
+        "branch_type": "content_classification",
+        "branch_rules": [
+            {
+                "key": "important",
+                "label": "Important",
+                "matcher": {
+                    "type": "content_classification",
+                    "keywords": ["urgent", "critical", "important"],
+                },
+            },
+            {
+                "key": "reference",
+                "label": "Reference",
+                "matcher": {
+                    "type": "content_classification",
+                    "keywords": ["reference", "note"],
+                },
+            },
+        ],
+        "fallback_branch": {"key": "other", "label": "Other"},
+    }
+
+
 class TestIfElseNodeStrategy:
     @pytest.mark.asyncio
     async def test_boolean_branch_true(self):
@@ -136,6 +161,60 @@ class TestIfElseNodeStrategy:
 
         assert exc_info.value.error_code == ErrorCode.INVALID_REQUEST
 
+    @pytest.mark.asyncio
+    async def test_content_branch_routes_text_by_keyword(self):
+        strategy = IfElseNodeStrategy()
+        input_data = {
+            "type": "TEXT",
+            "content": "Urgent article summary for today's workflow.",
+        }
+
+        result = await strategy.execute(
+            node={"id": "branch_1", "runtime_config": _content_branch_runtime_config()},
+            input_data=input_data,
+            service_tokens={},
+        )
+
+        assert result["type"] == "TEXT"
+        assert result["branch"] == "multi"
+        assert result["branch_type"] == "content_classification"
+        assert result["branch_outputs"]["important"]["content"] == input_data["content"]
+        assert result["branch_outputs"]["important"]["items"][0]["content"] == input_data["content"]
+        assert result["branch_outputs"]["reference"]["items"] == []
+        assert result["branch_counts"] == {"important": 1, "reference": 0, "other": 0}
+        assert result["branch_edge_order"] == ["important", "reference", "other"]
+
+    @pytest.mark.asyncio
+    async def test_content_branch_prefers_explicit_classification(self):
+        strategy = IfElseNodeStrategy()
+        input_data = {
+            "type": "TEXT",
+            "classification": "reference",
+            "content": "This text does not need keyword matching.",
+        }
+
+        result = await strategy.execute(
+            node={"id": "branch_1", "runtime_config": _content_branch_runtime_config()},
+            input_data=input_data,
+            service_tokens={},
+        )
+
+        assert result["branch_outputs"]["reference"]["items"][0]["classification"] == "reference"
+        assert result["branch_counts"] == {"important": 0, "reference": 1, "other": 0}
+
+    @pytest.mark.asyncio
+    async def test_content_branch_falls_back_when_no_rule_matches(self):
+        strategy = IfElseNodeStrategy()
+
+        result = await strategy.execute(
+            node={"id": "branch_1", "runtime_config": _content_branch_runtime_config()},
+            input_data={"type": "TEXT", "content": "A neutral update."},
+            service_tokens={},
+        )
+
+        assert result["branch_outputs"]["other"]["items"][0]["content"] == "A neutral update."
+        assert result["branch_counts"] == {"important": 0, "reference": 0, "other": 1}
+
     def test_file_type_branch_validate_accepts_fallback_only(self):
         strategy = IfElseNodeStrategy()
 
@@ -147,3 +226,8 @@ class TestIfElseNodeStrategy:
                 )
             }
         )
+
+    def test_content_branch_validate_accepts_rules(self):
+        strategy = IfElseNodeStrategy()
+
+        assert strategy.validate({"runtime_config": _content_branch_runtime_config()})
