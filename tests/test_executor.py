@@ -5,6 +5,7 @@ import pytest
 from app.common.errors import ErrorCode, FlowifyException
 from app.core.engine.executor import WorkflowExecutor, register_cancellation_event
 from app.core.engine.state import WorkflowState
+from app.core.nodes.logic_node import IfElseNodeStrategy
 from app.models.workflow import EdgeDefinition, NodeDefinition
 
 
@@ -435,6 +436,39 @@ class TestFileTypeBranchExecution:
         )
 
         assert WorkflowExecutor._branch_edge_key(edge) == "pdf"
+
+    def test_branch_edge_outputs_can_use_order_for_content_branches(self):
+        output_data = {
+            "type": "TEXT",
+            "branch": "multi",
+            "branch_edge_order": ["important", "reference", "other"],
+            "branch_outputs": {
+                "important": {"type": "TEXT", "content": "urgent", "items": [{"content": "urgent"}]},
+                "reference": {
+                    "type": "TEXT",
+                    "content": "reference",
+                    "items": [{"content": "reference"}],
+                },
+                "other": {"type": "TEXT", "content": "", "items": []},
+            },
+        }
+        edges = [
+            EdgeDefinition(source="node_branch", target="node_important"),
+            EdgeDefinition(source="node_branch", target="node_reference"),
+        ]
+
+        edge_outputs, active_targets, inactive_targets = (
+            WorkflowExecutor._build_multi_branch_edge_outputs(
+                "node_branch",
+                output_data,
+                edges,
+            )
+        )
+
+        assert edge_outputs[("node_branch", "node_important")]["content"] == "urgent"
+        assert edge_outputs[("node_branch", "node_reference")]["content"] == "reference"
+        assert active_targets == {"node_important", "node_reference"}
+        assert inactive_targets == set()
 
     @pytest.mark.asyncio
     async def test_file_type_branch_passes_edge_payload_to_each_target(self, mock_db):
@@ -986,6 +1020,172 @@ class TestLoopExecution:
         assert body_log.outputData["iterations"] == 2
         assert "1. processed:aaa" in body_log.outputData["content"]
         assert "2. processed:bbb" in body_log.outputData["content"]
+
+    @pytest.mark.asyncio
+    async def test_article_list_loop_routes_branch_body_outputs_to_each_edge(self, mock_db):
+        executor = WorkflowExecutor(mock_db)
+        output_inputs: dict[str, dict] = {}
+
+        async def side_effect(node, input_data, service_tokens):
+            node_id = node.get("id", "")
+            node_type = node.get("type", "")
+            if node_type == "input":
+                return {
+                    "type": "ARTICLE_LIST",
+                    "items": [
+                        {"title": "Urgent release", "content": "urgent update"},
+                        {"title": "Reference note", "content": "reference material"},
+                    ],
+                }
+            if node_type == "loop":
+                return input_data
+            if node_id == "node_branch":
+                content = input_data.get("content", "")
+                is_important = "urgent" in content.lower()
+                important_items = [input_data] if is_important else []
+                reference_items = [] if is_important else [input_data]
+                return {
+                    "type": "TEXT",
+                    "content": content,
+                    "branch": "multi",
+                    "branch_edge_order": ["important", "reference", "other"],
+                    "branch_outputs": {
+                        "important": {
+                            "type": "TEXT",
+                            "content": content if is_important else "",
+                            "items": important_items,
+                        },
+                        "reference": {
+                            "type": "TEXT",
+                            "content": "" if is_important else content,
+                            "items": reference_items,
+                        },
+                        "other": {"type": "TEXT", "content": "", "items": []},
+                    },
+                }
+            if node.get("runtime_type") == "output":
+                output_inputs[node_id] = input_data
+                return {"type": "TEXT", "content": "sent"}
+            return {"type": "TEXT", "content": "ok"}
+
+        executor._factory = _mock_factory(side_effect=side_effect)
+
+        nodes = [
+            NodeDefinition(id="node_1", type="input", config={}),
+            self._make_loop_node_text("node_2"),
+            NodeDefinition(
+                id="node_branch",
+                type="condition",
+                config={},
+                runtime_type="if_else",
+                runtime_config={"node_type": "CONDITION_BRANCH", "output_data_type": "TEXT"},
+            ),
+            NodeDefinition(id="node_important", type="gmail", config={}, runtime_type="output"),
+            NodeDefinition(id="node_reference", type="notion", config={}, runtime_type="output"),
+        ]
+        edges = [
+            EdgeDefinition(source="node_1", target="node_2"),
+            EdgeDefinition(source="node_2", target="node_branch"),
+            EdgeDefinition(source="node_branch", target="node_important"),
+            EdgeDefinition(source="node_branch", target="node_reference"),
+        ]
+
+        result = await executor.execute(
+            execution_id="exec_loop_content_branch",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=nodes,
+            edges=edges,
+            service_tokens={},
+        )
+
+        assert result.state == WorkflowState.SUCCESS
+        assert output_inputs["node_important"]["type"] == "TEXT"
+        assert "Urgent release" in output_inputs["node_important"]["content"]
+        assert "Reference note" not in output_inputs["node_important"]["content"]
+        assert output_inputs["node_reference"]["type"] == "TEXT"
+        assert "Reference note" in output_inputs["node_reference"]["content"]
+        assert "Urgent release" not in output_inputs["node_reference"]["content"]
+
+    @pytest.mark.asyncio
+    async def test_article_list_loop_routes_actual_content_branch_strategy(self, mock_db):
+        executor = WorkflowExecutor(mock_db)
+        output_inputs: dict[str, dict] = {}
+        content_branch = IfElseNodeStrategy()
+
+        async def side_effect(node, input_data, service_tokens):
+            node_id = node.get("id", "")
+            node_type = node.get("type", "")
+            if node_type == "input":
+                return {
+                    "type": "ARTICLE_LIST",
+                    "items": [
+                        {"title": "Urgent release", "content": "urgent update"},
+                        {"title": "Reference note", "content": "reference material"},
+                    ],
+                }
+            if node_type == "loop":
+                return input_data
+            if node_id == "node_branch":
+                return await content_branch.execute(node, input_data, service_tokens)
+            if node.get("runtime_type") == "output":
+                output_inputs[node_id] = input_data
+                return {"type": "TEXT", "content": "sent"}
+            return {"type": "TEXT", "content": "ok"}
+
+        executor._factory = _mock_factory(side_effect=side_effect)
+
+        nodes = [
+            NodeDefinition(id="node_1", type="input", config={}),
+            self._make_loop_node_text("node_2"),
+            NodeDefinition(
+                id="node_branch",
+                type="condition",
+                config={},
+                runtime_type="if_else",
+                runtime_config={
+                    "node_type": "CONDITION_BRANCH",
+                    "branch_type": "content_classification",
+                    "output_data_type": "TEXT",
+                    "branch_rules": [
+                        {
+                            "key": "important",
+                            "label": "Important",
+                            "matcher": {"keywords": ["urgent"]},
+                        },
+                        {
+                            "key": "reference",
+                            "label": "Reference",
+                            "matcher": {"keywords": ["reference"]},
+                        },
+                    ],
+                    "fallback_branch": {"key": "other", "label": "Other"},
+                },
+            ),
+            NodeDefinition(id="node_important", type="gmail", config={}, runtime_type="output"),
+            NodeDefinition(id="node_reference", type="notion", config={}, runtime_type="output"),
+        ]
+        edges = [
+            EdgeDefinition(source="node_1", target="node_2"),
+            EdgeDefinition(source="node_2", target="node_branch"),
+            EdgeDefinition(source="node_branch", target="node_important"),
+            EdgeDefinition(source="node_branch", target="node_reference"),
+        ]
+
+        result = await executor.execute(
+            execution_id="exec_loop_actual_content_branch",
+            workflow_id="wf_1",
+            user_id="usr_1",
+            nodes=nodes,
+            edges=edges,
+            service_tokens={},
+        )
+
+        assert result.state == WorkflowState.SUCCESS
+        assert "Urgent release" in output_inputs["node_important"]["content"]
+        assert "Reference note" not in output_inputs["node_important"]["content"]
+        assert "Reference note" in output_inputs["node_reference"]["content"]
+        assert "Urgent release" not in output_inputs["node_reference"]["content"]
 
     @pytest.mark.asyncio
     async def test_email_list_loop_executes_body_per_item(self, mock_db):
